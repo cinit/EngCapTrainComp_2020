@@ -34,13 +34,12 @@ int main() {
     } else {
         capture.set(CAP_PROP_FRAME_WIDTH, 640);
         capture.set(CAP_PROP_FRAME_HEIGHT, 480);
-        capture.set(CAP_PROP_FPS, 10);
+        capture.set(CAP_PROP_BUFFERSIZE, 1);
+//        capture.set(CAP_PROP_FPS, 10);
     }
     AuvManager auv(usart);
     gAuvManager = &auv;
     signal(SIGINT, sigint_handler);
-    auv.stop();
-//    auv.goStraight();
     msleep(100);
     findTubeAndAbsorbateLoop(capture, auv, true);
     gAuvManager = nullptr;
