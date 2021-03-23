@@ -4,7 +4,6 @@
 #include "binder/LinuxSerial.h"
 #include "binder/AuvManager.h"
 #include "util/common.h"
-#include "signal.h"
 
 #define SERIAL_DEV "/dev/ttyUSB0"
 
@@ -26,8 +25,9 @@ int main() {
 //        printf("open video failed\n");
 //        return 1;
 //    }
-//    VideoCapture capture("/home/kinit/Videos/AUV_00_h.mp4");
-    VideoCapture capture(2);
+    VideoCapture capture("/home/kinit/Videos/AUV_00_l.mp4");
+    capture.set(CAP_PROP_POS_FRAMES, 700);
+//    VideoCapture capture(2);
     if (!capture.isOpened()) {
         cout << "视频未打开" << endl;
         exit(1);
@@ -39,18 +39,7 @@ int main() {
     }
     AuvManager auv(usart);
     gAuvManager = &auv;
-    signal(SIGINT, sigint_handler);
     msleep(100);
     findTubeAndAbsorbateLoop(capture, auv, true);
     gAuvManager = nullptr;
-}
-
-void sigint_handler(int sig) {
-    if (sig == SIGINT) {
-        auto *mgr = const_cast<AuvManager *>(gAuvManager);
-        if (mgr != nullptr) {
-            mgr->stop();
-            gAuvManager = nullptr;
-        }
-    }
 }

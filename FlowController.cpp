@@ -40,16 +40,20 @@ enum FindTubeResult {
     TURN_RIGHT,
 };
 
-Mat Pretreatment(const Mat &src);
-
-Mat Lpretreatment(Mat &src);
-
-String CR(const Mat &src1, Mat &debug);
 
 Mat handleFrameAndSendCmdLoop(const Mat &src, AuvManager &auv, RunningStatus &status);
 
-FindTubeResult findTube(const Mat &src, AuvManager &auv, RunningStatus &status, Mat &debug);
+FindTubeResult findTube(const Mat &src, AuvManager &auv, RunningStatus &status, Mat &debug, vector<String> &dbg);
 
+bool isPointOnDownBorder(const Point &p, const Mat &mat) {
+    int height = mat.rows;
+    return p.y > height - 5;
+}
+
+bool isPointOnLrupBorder(const Point &p, const Mat &mat) {
+    int width = mat.cols;
+    return p.y < 5 || p.x < 10 || p.x > width - 10;
+}
 
 void findTubeAndAbsorbateLoop(cv::VideoCapture &video, AuvManager &auv, bool showWindow) {
     SHOW_WINDOW = showWindow;
@@ -64,7 +68,7 @@ void findTubeAndAbsorbateLoop(cv::VideoCapture &video, AuvManager &auv, bool sho
         }
         frameCounter++;
         Mat debug = handleFrameAndSendCmdLoop(rawFrame, auv, status);
-        DrawTextLeftCenterAutoColor(debug, (sprintf(text, "frame=%d", frameCounter), text), debug.rows - 48, 20);
+        DrawTextLeftCenterAutoColor(debug, (sprintf(text, "Frame: %d", frameCounter), text), debug.rows - 48, 16);
         if (SHOW_WINDOW) {
             imshow(WINDOW_NAME, debug);
             waitKey(100);
@@ -74,26 +78,12 @@ void findTubeAndAbsorbateLoop(cv::VideoCapture &video, AuvManager &auv, bool sho
     }
 }
 
-
-Mat Lpretreatment(Mat &src) {
-    Mat dst;
-    inRange(src, Scalar(110, 100, 100), Scalar(255, 255, 255), dst);
-    Mat element = getStructuringElement(MORPH_RECT, Size(5, 5));
-    //开闭操作，去除噪点
-    morphologyEx(dst, dst, MORPH_OPEN, element);
-    morphologyEx(dst, dst, MORPH_CLOSE, element);
-    return dst;
-}
-
 Mat handleFrameAndSendCmdLoop(const Mat &src, AuvManager &auv, RunningStatus &status) {
-    Mat frame, tmp1;
+    Mat tmp1;
     Mat debug = src.clone();
+    vector<String> dbg;
     GaussianBlur(src, tmp1, Size(5, 5), 3);
-//    frame = Pretreatment(tmp1);
-//    String result = CR(ImgDst);
-//    putText(Img, result, Point(20, 30), FONT_HERSHEY_SIMPLEX, 1, Scalar(0, 255, 255), 1, 5, false);
-    frame = Lpretreatment(tmp1);
-    FindTubeResult tube = findTube(frame, auv, status, debug);
+    FindTubeResult tube = findTube(src, auv, status, debug, dbg);
     if (status.isTurningRight) {
         if (tube != TURN_RIGHT && tube != NOT_FOUND) {
             status.isTurningRight = false;
@@ -102,9 +92,20 @@ Mat handleFrameAndSendCmdLoop(const Mat &src, AuvManager &auv, RunningStatus &st
     } else {
         if (tube == TURN_RIGHT) {
             status.isTurningRight = true;
+            auv.goStraight();
+            if (SHOW_WINDOW) {
+                imshow(WINDOW_NAME, debug);
+                waitKey(1500);
+            } else {
+                msleep(1500);
+            }
             auv.turnRight();
         } else {
             switch (tube) {
+                case GO_STRAIGHT: {
+                    auv.goStraight();
+                    break;
+                }
                 case DRIFT_LEFT: {
                     auv.deflectLeft();
                     break;
@@ -121,303 +122,175 @@ Mat handleFrameAndSendCmdLoop(const Mat &src, AuvManager &auv, RunningStatus &st
                     auv.translateRight();
                     break;
                 }
-                case GO_STRAIGHT: {
-                    //nop
-                    break;
-                }
             }
         }
+    }
+    if (SHOW_WINDOW) {
+        int startY = 16;
+        for (const string &str:dbg) {
+            DrawTextLeftCenterAutoColor(debug, str.c_str(), 8, startY);
+            startY += 16;
+        }
+        imshow(WINDOW_NAME, debug);
+        waitKey(30);
+    } else {
+        msleep(30);
     }
     return debug;
 }
 
-FindTubeResult findTube(const Mat &src, AuvManager &auv, RunningStatus &status, Mat &debug) {
-
-    const int TH_MOVE = src.cols / 7;
-
-    string str;
-    vector<vector<Point>> contours1;
-    vector<vector<Point>> contours2;
-    vector<vector<Point>> contours3;
-    vector<vector<Point>> contours;
-    vector<Vec4i> hierarchay1;
-    vector<Vec4i> hierarchay2;
-    vector<Vec4i> hierarchay3;
-    vector<Vec4i> hierarchay;
-    int direction = 1;
-    // double angle;
-    Rect roiUp(0, 0, src.cols, src.rows / 3);
-    Mat RIOImageUp(src, roiUp);
-    Rect roiMedium(0, src.rows / 3, src.cols, src.rows / 3);
-    Mat RIOImageM(src, roiMedium);
-    Rect roiDown(0, src.rows / 3 * 2, src.cols, src.rows / 3);
-    Mat RIOImageDown(src, roiDown);
-
-    FindTubeResult result;
-
-    findContours(RIOImageUp, contours1, hierarchay1, RETR_EXTERNAL, CHAIN_APPROX_SIMPLE, Point());
-    findContours(RIOImageM, contours2, hierarchay2, RETR_EXTERNAL, CHAIN_APPROX_SIMPLE, Point());
-    findContours(RIOImageDown, contours3, hierarchay3, RETR_EXTERNAL, CHAIN_APPROX_SIMPLE, Point());
-
-    findContours(src, contours, hierarchay, RETR_TREE, CHAIN_APPROX_SIMPLE, Point());
-    int maxcontour1 = 0, maxcontour2 = 0, maxcontour3 = 0;
-
-    //找到ROI中最大轮廓
-    for (int i = 0; i < contours1.size(); i++) {
-        if (maxcontour1 < contours1[i].size())
-            maxcontour1 = i;
+void drawPath(Mat &out, const vector<Point> &path, const Scalar &color, int thickness = 1, int lineType = LINE_8) {
+    if (path.empty()) {
+        return;
     }
-    for (int i = 0; i < contours2.size(); i++) {
-        if (maxcontour2 < contours2[i].size())
-            maxcontour2 = i;
+    Point last = path[0];
+    for (const Point &p:path) {
+        line(out, last, p, color, thickness, lineType);
+        last = p;
     }
-    for (int i = 0; i < contours3.size(); i++) {
-        if (maxcontour3 < contours3[i].size())
-            maxcontour3 = i;
-    }
+}
 
-    for (int i = 0; i < contours.size(); i++) {
-        drawContours(debug, contours, i, Scalar(0, 255, 255), 1, 8);
-    }
-    drawContours(debug(roiUp), contours1, maxcontour1, Scalar(0, 255, 255), 1, 8);
-    drawContours(debug(roiMedium), contours2, maxcontour2, Scalar(0, 255, 255), 1, 8);
-    drawContours(debug(roiDown), contours3, maxcontour3, Scalar(0, 255, 255), 1, 8);
-    //计算contour的重心
-    if (!contours1.empty() && !contours2.empty() && !contours3.empty()) {
-        Moments moment1, moment2, moment3;
-        moment1 = moments(contours1[maxcontour1], false);
-        moment2 = moments(contours2[maxcontour2], false);
-        moment3 = moments(contours3[maxcontour3], false);
-
-
-        Point pt1 = Point(0, 0), pt2 = Point(0, 0), pt3 = Point(0, 0);
-        if (moment1.m00 != 0) {
-            pt1.x = cvRound(moment1.m10 / moment1.m00);
-            pt1.y = cvRound(moment1.m01 / moment1.m00);
-        }
-        if (moment2.m00 != 0) {
-            pt2.x = cvRound(moment2.m10 / moment2.m00);
-            pt2.y = cvRound(moment2.m01 / moment2.m00) + src.rows / 3;
-        }
-        if (moment3.m00 != 0) {
-            pt3.x = cvRound(moment3.m10 / moment3.m00);
-            pt3.y = cvRound(moment3.m01 / moment3.m00) + src.rows / 3 * 2;
-        }
-
-
-        line(debug, pt1, pt2, Scalar(0, 255, 0), 2, LINE_8);
-        line(debug, pt2, pt3, Scalar(0, 255, 0), 2, LINE_8);
-
-        float k1 = 0, k2 = 0;
-        if (pt1.x != 0 && pt2.x != 0 && pt3.x != 0 && pt1.x != pt2.x && pt2.x != pt3.x) {
-            k1 = (pt1.y - pt2.y) / (pt1.x - pt2.x);
-            k2 = (pt2.y - pt3.y) / (pt2.x - pt3.x);
-        }
-        double angle1 = atan(k1) * 180 / 3.14;
-        double angle2 = atan(k2) * 180 / 3.14;
-        double deffrence = abs(angle1 - angle2);
-
-        if (angle1 > -50 && angle1 < -40.0 && abs(angle2) > 70.0) {
-            str += "BigRight";
-//            selfInspectionSendArray[1] = 0x05;
-            result = TURN_RIGHT;
-        } else if (contours1[maxcontour1].size() < contours2[maxcontour2].size() / 2 &&
-                   contours1[maxcontour1].size() < contours3[maxcontour3].size() / 2 &&
-                   abs(contours2[maxcontour2].size() - contours3[maxcontour3].size()) <
-                   contours1[maxcontour1].size() / 2) {
-            if (pt1.x != 0 && pt2.x != 0 && pt3.x != 0 && pt1.x != pt2.x && pt2.x != pt3.x) {
-                float k = (pt2.y - pt3.y) / (pt2.x - pt3.x);
-                double angle = atan(k) * 180 / 3.14;
-                if (angle > -80 && angle < -50) {
-                    str += "smallright";
-                    result = DRIFT_RIGHT;
-                } else if (angle < 80 && angle > 50) {
-                    str += "smalLeft";
-                    result = DRIFT_LEFT;
-                } else if (pt2.x > src.cols + TH_MOVE && pt3.x > src.cols + TH_MOVE) {
-                    str += "Move_right";
-                    result = TRANSLATE_RIGHT;
-                } else if (pt2.x < src.cols - TH_MOVE && pt3.x < src.cols - TH_MOVE) {
-                    str += "Move_left";
-                    result = TRANSLATE_LEFT;
-                } else if (pt2.x >= src.cols - TH_MOVE && pt2.x <= src.cols + TH_MOVE && pt3.x >= src.cols - TH_MOVE &&
-                           pt3.x <= src.cols + TH_MOVE) {
-                    str += "forward";
-                    result = GO_STRAIGHT;
+vector<Point> findOutlineUpward(Point &startPoint, const vector<Point> &doubledContour, const Mat &src) {
+    vector<Point> result;
+    {
+        bool foundStart = false;
+        bool copyingPoint = false;
+        Point lastPoint(-1, -1);
+        for (const Point &p:doubledContour) {
+            if (!foundStart) {
+                if (p == startPoint) {
+                    foundStart = true;
+                    lastPoint = p;
+                }
+            } else {
+                if (!copyingPoint) {
+                    if (p.y < lastPoint.y) {
+                        copyingPoint = true;
+                        result.emplace_back(lastPoint);
+                        result.emplace_back(p);
+                    } else {
+                        break;
+                    }
                 } else {
-                    str += "NOT_FOUND";
-                    result = NOT_FOUND;
+                    result.emplace_back(p);
+                    if (isPointOnLrupBorder(p, src)) {
+                        break;
+                    }
                 }
             }
-        } else if (contours2[maxcontour2].size() < contours1[maxcontour1].size() / 2 &&
-                   contours2[maxcontour2].size() < contours3[maxcontour3].size() / 2 &&
-                   abs(contours1[maxcontour1].size() - contours3[maxcontour3].size()) <
-                   contours2[maxcontour2].size() / 2) {
-            if (pt1.x != 0 && pt2.x != 0 && pt3.x != 0 && pt1.x != pt2.x && pt2.x != pt3.x) {
-                float k = (pt1.y - pt3.y) / (pt1.x - pt3.x);
-                double angle = atan(k) * 180 / 3.14;
-                if (angle > -80 && angle < -50) {
-                    str += "smallright";
-                    result = DRIFT_RIGHT;
-                } else if (angle < 80 && angle > 50) {
-                    str += "smalLeft";
-                    result = DRIFT_LEFT;
-                } else if (pt1.x > src.cols + TH_MOVE && pt3.x > src.cols + TH_MOVE) {
-                    str += "Move_right";
-                    result = TRANSLATE_RIGHT;
-                } else if (pt1.x < src.cols - TH_MOVE && pt3.x < src.cols - TH_MOVE) {
-                    str += "Move_left";
-                    result = TRANSLATE_LEFT;
-                } else if (pt1.x >= src.cols - TH_MOVE && pt1.x <= src.cols + TH_MOVE && pt3.x >= src.cols - TH_MOVE &&
-                           pt3.x <= src.cols + TH_MOVE) {
-                    str += "forward";
-                    result = GO_STRAIGHT;
-                } else {
-                    str += "NOT_FOUND";
-                    result = NOT_FOUND;
-                }
-            }
-        } else if (contours3[maxcontour3].size() < contours2[maxcontour2].size() / 2 &&
-                   contours3[maxcontour3].size() < contours1[maxcontour1].size() / 2 &&
-                   abs(contours2[maxcontour2].size() - contours1[maxcontour1].size()) <
-                   contours3[maxcontour3].size() / 2) {
-            if (pt1.x != 0 && pt2.x != 0 && pt3.x != 0 && pt1.x != pt2.x && pt2.x != pt3.x) {
-                float k = (pt1.y - pt2.y) / (pt1.x - pt2.x);
-                double angle = atan(k) * 180 / 3.14;
-                if (angle > -80 && angle < -50) {
-                    str += "smallright";
-                    result = DRIFT_RIGHT;
-                } else if (angle < 80 && angle > 50) {
-                    str += "smalLeft";
-                    result = DRIFT_LEFT;
-                } else if (pt1.x > src.cols + TH_MOVE && pt2.x > src.cols + TH_MOVE) {
-                    str += "Move_right";
-                    result = TRANSLATE_RIGHT;
-                } else if (pt1.x < src.cols - TH_MOVE && pt2.x < src.cols - TH_MOVE) {
-                    str += "Move_left";
-                    result = TRANSLATE_LEFT;
-                } else if (pt1.x >= src.cols - TH_MOVE && pt1.x <= src.cols + TH_MOVE && pt2.x >= src.cols - TH_MOVE &&
-                           pt2.x <= src.cols + TH_MOVE) {
-                    str += "forward";
-                    result = GO_STRAIGHT;
-                } else {
-                    str += "NOT_FOUND";
-                    result = NOT_FOUND;
-                }
-            }
-        } else {
-            if (pt1.x > src.cols / 2 - TH_MOVE && pt1.x < src.cols / 2 + TH_MOVE && pt2.x > src.cols / 2 - TH_MOVE &&
-                pt2.x < src.cols / 2 + TH_MOVE && pt3.x > src.cols / 2 - TH_MOVE && pt3.x < src.cols / 2 + TH_MOVE) {
-                str += "forward";
-                result = GO_STRAIGHT;
-            } else if (str.empty() && pt1.x < src.cols / 2 - TH_MOVE && pt2.x < src.cols / 2 - TH_MOVE &&
-                       pt3.x < src.cols / 2 - TH_MOVE) {
-                str += "Move_left";
-                result = TRANSLATE_LEFT;
-            } else if (str.empty() && pt1.x > src.cols / 2 + TH_MOVE && pt2.x > src.cols / 2 + TH_MOVE &&
-                       pt3.x > src.cols / 2 + TH_MOVE) {
-                str += "Move_right";
-                result = TRANSLATE_RIGHT;
-            } else if (str.empty() && angle1 < 85 && angle2 < 85 && angle1 > 50 && angle2 > 50) {
-                str += "smallLeft";
-                result = DRIFT_LEFT;
-            } else if (str.empty() && angle1 > -85 && angle2 > -85 && angle1 < -50 && angle2 < -50) {
-                str += "smallright";
-                result = DRIFT_RIGHT;
-            }
-//                else{
-//                    str+="forward";
-//                    selfInspectionSendArray[1]=0x07;
-//                }
         }
-//        if (turnOver == 1 && selfInspectionSendArray[1] != 0x07) {
-//            str = "";
-//            selfInspectionSendArray[1] = 0x00;
-//        }
-//            cout <<angle1<<"  "<<abs(angle2)<< endl;
-//            cout<<str;
-
-        //     cout << pt1.x << " " << pt1.y << "    " << pt2.x << " " << pt2.y << "   " << pt3.x << " " << pt3.y << endl;
     }
-
-
-    DrawTextLeftCenterAutoColor(debug, str.c_str(), 20, 20);
-//    cout << str << endl;
+    if (!result.empty()) {
+        return result;
+    }
+    {
+        bool foundStart = false;
+        bool copyingPoint = false;
+        Point lastPoint(-1, -1);
+        for (auto it = doubledContour.rbegin(); it != doubledContour.rend(); it++) {
+            const Point &p = *it;
+            if (!foundStart) {
+                if (p == startPoint) {
+                    foundStart = true;
+                    lastPoint = p;
+                }
+            } else {
+                if (!copyingPoint) {
+                    if (p.y < lastPoint.y) {
+                        copyingPoint = true;
+                        result.emplace_back(lastPoint);
+                        result.emplace_back(p);
+                    } else {
+                        break;
+                    }
+                } else {
+                    result.emplace_back(p);
+                    if (isPointOnLrupBorder(p, src)) {
+                        break;
+                    }
+                }
+            }
+        }
+    }
     return result;
 }
 
-//图片预处理
-Mat Pretreatment(const Mat &src) {
-    Mat dst;
-    //转化为HSV
-//    cvtColor(src,dst,COLOR_RGB2HSV);
-//    vector<Mat> hsvSplit;
-//    split(dst,hsvSplit);
-//    //对HSV的亮度通道进行直方图均衡
-//    equalizeHist(hsvSplit[2],hsvSplit[2]);
-//    //合并三种通道
-//    merge(hsvSplit,dst);
-//    cvtColor(dst,dst,COLOR_HSV2BGR);
-    int blockSize = 21;
-    int constValue = 20;
-    //cvtColor(dst,dst,COLOR_RGB2GRAY);
-    //AdaptiveThereshold(dst,dst);
-    //adaptiveThreshold(dst,dst,255,ADAPTIVE_THRESH_MEAN_C,THRESH_BINARY_INV,blockSize,constValue);
-    inRange(dst, Scalar(0, 0, 0), Scalar(100, 75, 75), dst);
+FindTubeResult findTube(const Mat &src, AuvManager &auv, RunningStatus &status, Mat &debug, vector<String> &dbg) {
+    char buf[64];
+    vector<vector<Point>> contours;
+    vector<Vec4i> hierarchay;
+    Mat pipeTh;
+    inRange(src, Scalar(110, 100, 100), Scalar(255, 255, 255), pipeTh);
     Mat element = getStructuringElement(MORPH_RECT, Size(5, 5));
     //开闭操作，去除噪点
-    morphologyEx(dst, dst, MORPH_OPEN, element);
-    morphologyEx(dst, dst, MORPH_CLOSE, element);
-    return dst;
-}
-
-
-//形状识别
-String CR(const Mat &src1, Mat &debug) {
-    vector<vector<Point> > contours;
-    String result = "null";
-    vector<Vec4i> hierarchay;
-    findContours(src1, contours, hierarchay, RETR_EXTERNAL, CHAIN_APPROX_NONE);
-    vector<vector<Point> > contours_poly(contours.size());
+    morphologyEx(pipeTh, pipeTh, MORPH_OPEN, element);
+    morphologyEx(pipeTh, pipeTh, MORPH_CLOSE, element);
+    findContours(pipeTh, contours, hierarchay, RETR_EXTERNAL, CHAIN_APPROX_SIMPLE);
+    int tubeContourIdx = -1;
+    //找到ROI中最大轮廓
+    int currentCntLen = 0;
     for (int i = 0; i < contours.size(); i++) {
-        approxPolyDP(Mat(contours[i]), contours_poly[i], 3, true);
-        drawContours(debug, contours_poly, i, Scalar(0, 255, 255), 1, 8);
-    }
-    int res = 0, n = 0;
-    if (!contours.empty()) {
-        res = contours_poly[0].size();
-    }
-    cout << contours.size() << endl;
-    for (int i = 1; i < contours.size(); i++) {
-        if (res < contours_poly[i].size()) {
-            res = contours_poly[i].size();
-            n = i;
+        int len = (int) arcLength(contours[i], true);
+        if (len > currentCntLen) {
+            currentCntLen = len;
+            tubeContourIdx = i;
         }
     }
-    //当吸附物处于图像边缘时不识别
-    int Maxcol = 0, Mincol = 7, Maxrow = 0, Minrow = 7;
-    for (int i = 0; i < res; i++) {
-        if (Maxcol < contours_poly[n][i].x)
-            Maxcol = contours_poly[n][i].x;
-        if (Mincol > contours_poly[n][i].x)
-            Mincol = contours_poly[n][i].x;
-        if (Maxrow < contours_poly[n][i].y)
-            Maxrow = contours_poly[n][i].y;
-        if (Minrow > contours_poly[n][i].y)
-            Minrow = contours_poly[n][i].y;
+//    drawContours(debug, contours, tubeContourIdx, Scalar(0, 0, 255), 1, 8);
+    if (contours.empty()) {
+        dbg.emplace_back("contours.empty(): NO CONTOUR FOUND");
+        return NOT_FOUND;
     }
-//    cout<<Img.cols<<"  "<<Img.rows<<endl;
-//    cout<<Maxcol<<"  "<<Mincol<<"  "<<Maxrow<<"  "<<Minrow<<endl;
-    //   if (Minrow > 3 && Maxrow < Img.rows - 3 && Mincol > 3 && Maxcol < Img.cols - 3) {
-    if (res > 7) {
-        cout << "size=" << res << endl;
-        result = "Circle";
+    vector<Point> pipeContour = contours[tubeContourIdx];
+    std::vector<Point> tubeApprox;
+    float epsilon = (float) (0.005 * arcLength(pipeContour, true));
+    std::vector<Point> pipeApprox;
+    approxPolyDP(pipeContour, pipeApprox, epsilon, true);
+//    drawContours(debug, vector<vector<Point>>{pipeApprox}, -1, Scalar(255, 255, 255), 1, 8);
+    Point p1(-1, -1), p2(-1, -1);
+    for (Point &p:pipeApprox) {
+        if (isPointOnDownBorder(p, src)) {
+            if (p1.x < 0 || p.x < p1.x) {
+                p1 = p;
+            }
+            if (p2.x < 0 || p.x > p2.x) {
+                p2 = p;
+            }
+        }
     }
-    if (res < 6 && res > 3) {
-        cout << "size=" << res << endl;
-        result = "Rectangle";
+    sprintf(buf, "P1=(%d,%d) P2=(%d,%d)", p1.x, p1.y, p2.x, p2.y);
+    if (p1.x < 0 || p2.x < 0) {
+        dbg.emplace_back("BASE POINTS NOT FOUND");
+    } else {
+        dbg.emplace_back(buf);
     }
+    vector<Point> outlineLeft, outlineRight;
+    {
+        vector<Point> dextro;
+        dextro.insert(dextro.end(), pipeApprox.begin(), pipeApprox.end());
+        dextro.insert(dextro.end(), pipeApprox.begin(), pipeApprox.end());
+        outlineLeft = findOutlineUpward(p1, dextro, src);
+        outlineRight = findOutlineUpward(p2, dextro, src);
+    }
+    if (outlineLeft.empty() || outlineRight.empty()) {
+        !outlineLeft.empty() || (dbg.emplace_back("Outline left empty"), false);
+        !outlineRight.empty() || (dbg.emplace_back("Outline right empty"), false);
+    } else {
+        drawPath(debug, outlineLeft, Scalar(255, 255, 255), 2, 8);
+        drawPath(debug, outlineRight, Scalar(255, 255, 255), 2, 8);
+        for (int i = 0; i < outlineLeft.size(); ++i) {
+            const Point &p = outlineLeft[i];
+            DrawTextLeftCenterAutoColor(debug, (sprintf(buf, "L%d", i), buf), p.x, p.y);
+        }
+        for (int i = 0; i < outlineRight.size(); ++i) {
+            const Point &p = outlineRight[i];
+            DrawTextLeftCenterAutoColor(debug, (sprintf(buf, "R%d", i), buf), p.x, p.y);
+        }
+        //start find corner by outlineRight
+        Vec2f sum;
 
-    return result;
+
+    }
+    return NOT_FOUND;
 }
 
