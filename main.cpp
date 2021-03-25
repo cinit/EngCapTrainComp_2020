@@ -10,10 +10,6 @@
 using namespace cv;
 using namespace std;
 
-volatile AuvManager *gAuvManager = nullptr;
-
-void sigint_handler(int);
-
 int main() {
     LinuxSerial usart(SERIAL_DEV);
     if (!usart.isOpened()) {
@@ -38,8 +34,6 @@ int main() {
 //        capture.set(CAP_PROP_FPS, 10);
     }
     AuvManager auv(usart);
-    gAuvManager = &auv;
     msleep(100);
     findTubeAndAbsorbateLoop(capture, auv, true);
-    gAuvManager = nullptr;
 }
