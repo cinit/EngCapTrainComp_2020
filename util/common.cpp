@@ -4,6 +4,16 @@
 
 #include "common.h"
 
+#ifdef __WIN32
+
+#include "windows.h"
+
+void msleep(int ms) {
+    Sleep(ms);
+}
+
+#else
+
 #include "future"
 
 /* sleep for ms */
@@ -14,3 +24,5 @@ void msleep(int ms) {
     delay.tv_usec = usec % 1000000;
     select(0, nullptr, nullptr, nullptr, &delay);
 }
+
+#endif

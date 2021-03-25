@@ -34,7 +34,7 @@ void AuvManager::translateLeft() {
 
 void AuvManager::translateRight() {
     printf("I: AuvManager::translate right\n");
-    transactAndWaitForReply(0x03, TRANSLATE_VALUE);
+    transactAndWaitForReply(0x04, TRANSLATE_VALUE);
 }
 
 void AuvManager::turnRight() {

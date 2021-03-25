@@ -7,6 +7,18 @@
 
 #include "stdint.h"
 
+#if defined(__GNUC__)
+
+#define Nullable
+#define NonNull  __attribute__((nonnull))
+
+#elif
+
+#define Nullable
+#define NonNull
+
+#endif
+
 /* sleep for ms */
 void msleep(int ms);
 
