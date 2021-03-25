@@ -47,12 +47,17 @@ FindTubeResult findTube(const Mat &src, AuvManager &auv, RunningStatus &status, 
 
 bool isPointOnDownBorder(const Point &p, const Mat &mat) {
     int height = mat.rows;
-    return p.y > height - 5;
+    return p.y > height - 10;
 }
 
 bool isPointOnLrupBorder(const Point &p, const Mat &mat) {
     int width = mat.cols;
-    return p.y < 5 || p.x < 10 || p.x > width - 10;
+    return p.y < 10 || p.x < 10 || p.x > width - 10;
+}
+
+bool isPointOnRightBorder(const Point &p, const Mat &mat) {
+    int width = mat.cols;
+    return p.x > width - 10;
 }
 
 void findTubeAndAbsorbateLoop(cv::VideoCapture &video, AuvManager &auv, bool showWindow) {
@@ -126,15 +131,12 @@ Mat handleFrameAndSendCmdLoop(const Mat &src, AuvManager &auv, RunningStatus &st
         }
     }
     if (SHOW_WINDOW) {
+        DrawTextLeftCenterAutoColor(debug, "+-----------+ 100px", 16, debug.rows - 32);
         int startY = 16;
         for (const string &str:dbg) {
             DrawTextLeftCenterAutoColor(debug, str.c_str(), 8, startY);
             startY += 16;
         }
-        imshow(WINDOW_NAME, debug);
-        waitKey(30);
-    } else {
-        msleep(30);
     }
     return debug;
 }
@@ -168,6 +170,9 @@ vector<Point> findOutlineUpward(Point &startPoint, const vector<Point> &doubledC
                         copyingPoint = true;
                         result.emplace_back(lastPoint);
                         result.emplace_back(p);
+                        if (isPointOnLrupBorder(p, src)) {
+                            break;
+                        }
                     } else {
                         break;
                     }
@@ -200,6 +205,9 @@ vector<Point> findOutlineUpward(Point &startPoint, const vector<Point> &doubledC
                         copyingPoint = true;
                         result.emplace_back(lastPoint);
                         result.emplace_back(p);
+                        if (isPointOnLrupBorder(p, src)) {
+                            break;
+                        }
                     } else {
                         break;
                     }
@@ -215,17 +223,111 @@ vector<Point> findOutlineUpward(Point &startPoint, const vector<Point> &doubledC
     return result;
 }
 
+inline float diffRad180(float a, float b) {
+    float diff = abs(a - b);
+    while (diff >= CV_PI) {
+        diff -= CV_PI;
+    }
+    return diff;
+}
+
+/**
+ *
+ * @param test
+ * @param reference
+ * @param errorThreshold
+ * @return true if ok, false if corner
+ */
+bool checkVectorConsistency(const Vec2i &test, const Vec2i &reference, int errorThreshold) {
+    double radRef = atan2(reference[1], reference[0]);
+    double testRef = atan2(test[1], test[0]);
+    double diffRad = diffRad180(radRef, testRef);
+    double diffDeg = diffRad * 57.3;
+    if (diffDeg < 10.0) {
+        return true;
+    }
+    if (diffDeg > 60.0) {
+        return false;
+    }
+    float len = hypot(reference[0], reference[1]);
+    if (sin(diffRad) * len > errorThreshold) {
+        return false;
+    }
+    return true;
+}
+
+Vec2f basify(const Vec2f &v) {
+    if (v[0] == 0 && v[1] == 0) {
+        return Vec2f(0, 0);
+    }
+    float val = 1.0f / hypot(v[0], v[1]);
+    return Vec2f(v[0] * val, v[1] * val);
+}
+
+Vec2f basify(const Vec2i &v) {
+    return basify(Vec2f(v[0], v[1]));
+}
+
+vector<Point> followStraightDown(const vector<Point> &outline, const Point &start, Nullable Point *lastPoint) {
+    Vec2i sumVec(0, 0);
+    vector<Point> path;
+    int count = 0;
+    int cornerThreshold = 20;
+    Point currentPoint;
+    for (const Point &p:outline) {
+        Vec2i det(p.x - start.x, p.y - start.y);
+        if (count < 2) {
+            sumVec += det;
+            path.emplace_back(p);
+        } else {
+            if (hypot(sumVec[0], sumVec[1]) > 2 * cornerThreshold
+                && checkVectorConsistency(det, sumVec, cornerThreshold)) {
+                // is line
+                sumVec += det;
+                path.emplace_back(p);
+            } else {
+                // corner
+                break;
+            }
+        }
+        currentPoint = p;
+        count++;
+    }
+    Vec2f direction = basify(sumVec);
+    Vec2i vecP2ActualEnd = Vec2i(currentPoint.x - start.x, currentPoint.y - start.y);
+    if (lastPoint != nullptr) {
+        *lastPoint = currentPoint;
+    }
+    return path;
+}
+
+void bidirectionalExclude(vector<Point> &inOutA, vector<Point> &inOutB) {
+    vector<Point> tmpA = inOutA, tmpB = inOutB;
+    for (auto currP = inOutA.begin(); currP != inOutA.end(); ++currP) {
+        if (*std::find(tmpB.begin(), tmpB.end(), *currP) != *tmpB.end()) {
+            inOutA.erase(currP);
+            currP--;
+        }
+    }
+    for (auto currP = inOutB.begin(); currP != inOutB.end(); ++currP) {
+        if (*std::find(tmpA.begin(), tmpA.end(), *currP) != *tmpA.end()) {
+            inOutB.erase(currP);
+            currP--;
+        }
+    }
+}
+
 FindTubeResult findTube(const Mat &src, AuvManager &auv, RunningStatus &status, Mat &debug, vector<String> &dbg) {
     char buf[64];
     vector<vector<Point>> contours;
-    vector<Vec4i> hierarchay;
+    vector<Vec4i> hierarchy;
     Mat pipeTh;
     inRange(src, Scalar(110, 100, 100), Scalar(255, 255, 255), pipeTh);
-    Mat element = getStructuringElement(MORPH_RECT, Size(5, 5));
+    Mat tmpStructEle = getStructuringElement(MORPH_RECT, Size(5, 5));
     //开闭操作，去除噪点
-    morphologyEx(pipeTh, pipeTh, MORPH_OPEN, element);
-    morphologyEx(pipeTh, pipeTh, MORPH_CLOSE, element);
-    findContours(pipeTh, contours, hierarchay, RETR_EXTERNAL, CHAIN_APPROX_SIMPLE);
+    morphologyEx(pipeTh, pipeTh, MORPH_OPEN, tmpStructEle);
+    morphologyEx(pipeTh, pipeTh, MORPH_CLOSE, tmpStructEle);
+    findContours(pipeTh, contours, hierarchy, RETR_EXTERNAL, CHAIN_APPROX_SIMPLE);
     int tubeContourIdx = -1;
     //找到ROI中最大轮廓
     int currentCntLen = 0;
@@ -286,10 +388,46 @@ FindTubeResult findTube(const Mat &src, AuvManager &auv, RunningStatus &status, 
             const Point &p = outlineRight[i];
             DrawTextLeftCenterAutoColor(debug, (sprintf(buf, "R%d", i), buf), p.x, p.y);
         }
-        //start find corner by outlineRight
-        Vec2f sum;
+        {
+            //start find corner by outlineRight
+            Point lastDownRight, lastDownLeft/*, endDownRight, endDownLeft*/;
+            vector<Point> rightDownPath = followStraightDown(outlineRight, p2, &lastDownRight);
+            vector<Point> leftDownPath = followStraightDown(outlineLeft, p1, &lastDownLeft);
+            if (outlineLeft[outlineLeft.size() - 1] != lastDownLeft
+                && outlineRight[outlineRight.size() - 1] != lastDownRight
+                && isPointOnRightBorder(outlineLeft[outlineLeft.size() - 1], src)
+                && isPointOnRightBorder(outlineRight[outlineRight.size() - 1], src)) {
+                std::vector<Point> reservedPath1 = outlineLeft, reservedPath2 = outlineRight;
+                std::reverse(reservedPath1.begin(), reservedPath1.end());
+                std::reverse(reservedPath2.begin(), reservedPath2.end());
+                vector<Point> leftLrPath = followStraightDown(reservedPath1, reservedPath1[0], nullptr);
+                vector<Point> rightLrPath = followStraightDown(reservedPath2, reservedPath2[0], nullptr);
+                bidirectionalExclude(leftDownPath, leftLrPath);
 
+                Point p1u, p1d, p2u, p2d;
+                p1u = leftLrPath[leftLrPath.size() - 1];
+                p1d = leftDownPath[leftDownPath.size() - 1];
+                p2u = rightLrPath[rightLrPath.size() - 1];
+                p2d = rightDownPath[rightDownPath.size() - 1];
 
+                DrawTextLeftCenterAutoColor(debug, "*[1-U]", p1u.x - 8, p1u.y + 16);
+                DrawTextLeftCenterAutoColor(debug, "*[1-D]", p1d.x - 8, p1d.y + 16);
+                DrawTextLeftCenterAutoColor(debug, "*[2-U]", p2u.x - 8, p2u.y + 16);
+                DrawTextLeftCenterAutoColor(debug, "*[2-D]", p2d.x - 8, p2d.y + 16);
+
+                Vec2i cnrVec = p1u + p1d + p2u + p2d;
+                Point cornerPoint(cnrVec[0] / 4, cnrVec[1] / 4);
+
+                rectangle(debug, cornerPoint - Point(20, 20), cornerPoint + Point(20, 20), Scalar(0, 0, 255), 2);
+                DrawTextLeftCenterAutoColor(debug, "* CORNER", cornerPoint.x - 4, cornerPoint.y);
+
+                dbg.emplace_back((sprintf(buf, "Corner(%d,%d)", cornerPoint.x, cornerPoint.y), buf));
+            } else {
+                DrawTextLeftCenterAutoColor(debug, "*[R-LAST]", lastDownRight.x - 8, lastDownRight.y + 16);
+                DrawTextLeftCenterAutoColor(debug, "*[L-LAST]", lastDownLeft.x - 8, lastDownLeft.y + 16);
+                dbg.emplace_back("Corner not found");
+            }
+        }
     }
     return NOT_FOUND;
 }
