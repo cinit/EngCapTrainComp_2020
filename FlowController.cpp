@@ -21,6 +21,8 @@
 
 #define WINDOW_NAME "EngTrainUpperCtl"
 
+#define DEBUG_FF 50
+
 using namespace std;
 using namespace cv;
 
@@ -76,7 +78,7 @@ void findTubeAndAbsorbateLoop(cv::VideoCapture &video, AuvManager &auv, bool sho
         DrawTextLeftCenterAutoColor(debug, (sprintf(text, "Frame: %d", frameCounter), text), debug.rows - 48, 16);
         if (SHOW_WINDOW) {
             imshow(WINDOW_NAME, debug);
-            waitKey(100);
+            waitKey(DEBUG_FF);
         } else {
             msleep(100);
         }
@@ -272,7 +274,7 @@ vector<Point> followStraightDown(const vector<Point> &outline, const Point &star
     Vec2i sumVec(0, 0);
     vector<Point> path;
     int count = 0;
-    int cornerThreshold = 20;
+    int cornerThreshold = 40;
     Point currentPoint;
     for (const Point &p:outline) {
         Vec2i det(p.x - start.x, p.y - start.y);
@@ -280,8 +282,8 @@ vector<Point> followStraightDown(const vector<Point> &outline, const Point &star
             sumVec += det;
             path.emplace_back(p);
         } else {
-            if (hypot(sumVec[0], sumVec[1]) > 2 * cornerThreshold
-                && checkVectorConsistency(det, sumVec, cornerThreshold)) {
+            if (hypot(sumVec[0], sumVec[1]) < 2 * cornerThreshold
+                || checkVectorConsistency(det, sumVec, cornerThreshold)) {
                 // is line
                 sumVec += det;
                 path.emplace_back(p);
@@ -316,6 +318,78 @@ void bidirectionalExclude(vector<Point> &inOutA, vector<Point> &inOutB) {
         }
     }
 }
+
+float countErr(const vector<Point> points, int index) {
+    Point avg(0, 0);
+    for (int i = 0; i < points.size(); ++i) {
+        if (i == index) {
+            continue;
+        }
+        avg += points[i];
+    }
+    avg.x /= points.size() - ((index < 0) ? 0 : 1);
+    avg.y /= points.size() - ((index < 0) ? 0 : 1);
+    float err = 0;
+    for (int i = 0; i < points.size(); ++i) {
+        if (i == index) {
+            continue;
+        }
+        err = hypot(avg.x - points[i].x, avg.y - points[i].y);
+    }
+    return err;
+}
+
+Point average4(const Point &p1, const Point &p2, const Point &p3, const Point &p4) {
+    float TH_PCT = 0.5;
+//    const Point pts[4] = {p1, p2, p3, p4};
+//    Vec2i cnrVec = p1 + p2 + p3 + p4;
+//    Point avg(cnrVec[0] / 4, cnrVec[1] / 4);
+//    float errSum = 0;
+//    float errs[4];
+//    for (int i = 0; i < 4; ++i) {
+//        errs[i] = hypot(avg.x - pts[i].x, avg.y - pts[i].y);
+//        errSum += errs[i];
+//    }
+//    float currentMax = 0;
+//    int ko = -1;
+//    for (int i = 0; i < 4; ++i) {
+//        float errs[0] / errSum;
+//        if ()
+//    }
+//    if ( < TH_PCT && errs[1] / errSum < TH_PCT
+//           && errs[2] / errSum < TH_PCT && errs[3] / errSum < TH_PCT) {
+//        return avg;
+//    } else {
+//
+//    }
+    const vector<Point> points = vector<Point>{p1, p2, p3, p4};
+    float totalError = countErr(points, -1);
+    float singleError[4];
+    int index = -1;
+    float maxError = 0;
+    for (int i = 0; i < 4; ++i) {
+        singleError[i] = countErr(points, i);
+        float temp = (totalError - singleError[i]) / totalError;
+        if (temp >= TH_PCT) {
+            if (temp > maxError) {
+                maxError = temp;
+                index = i;
+                break;
+            }
+        }
+    }
+    Point result(0, 0);
+    for (int i = 0; i < 4; ++i) {
+        if (i == index) {
+            continue;
+        }
+        result += points[i];
+    }
+    result.x /= points.size() - ((index < 0) ? 0 : 1);
+    result.y /= points.size() - ((index < 0) ? 0 : 1);
+    return result;
+}
+
 
 FindTubeResult findTube(const Mat &src, AuvManager &auv, RunningStatus &status, Mat &debug, vector<String> &dbg) {
     char buf[64];
@@ -402,7 +476,7 @@ FindTubeResult findTube(const Mat &src, AuvManager &auv, RunningStatus &status, 
                 std::reverse(reservedPath2.begin(), reservedPath2.end());
                 vector<Point> leftLrPath = followStraightDown(reservedPath1, reservedPath1[0], nullptr);
                 vector<Point> rightLrPath = followStraightDown(reservedPath2, reservedPath2[0], nullptr);
-                bidirectionalExclude(leftDownPath, leftLrPath);
+//                bidirectionalExclude(leftDownPath, leftLrPath);
 
                 Point p1u, p1d, p2u, p2d;
                 p1u = leftLrPath[leftLrPath.size() - 1];
@@ -410,13 +484,15 @@ FindTubeResult findTube(const Mat &src, AuvManager &auv, RunningStatus &status, 
                 p2u = rightLrPath[rightLrPath.size() - 1];
                 p2d = rightDownPath[rightDownPath.size() - 1];
 
-                DrawTextLeftCenterAutoColor(debug, "*[1-U]", p1u.x - 8, p1u.y + 16);
+                line(debug, p1u, p2u, Scalar(0, 0, 0), 2);
+                line(debug, p1d, p2d, Scalar(0, 0, 0), 2);
+
+                DrawTextLeftCenterAutoColor(debug, "*[1-U]", p1u.x - 32, p1u.y + 16);
                 DrawTextLeftCenterAutoColor(debug, "*[1-D]", p1d.x - 8, p1d.y + 16);
-                DrawTextLeftCenterAutoColor(debug, "*[2-U]", p2u.x - 8, p2u.y + 16);
+                DrawTextLeftCenterAutoColor(debug, "*[2-U]", p2u.x - 32, p2u.y + 16);
                 DrawTextLeftCenterAutoColor(debug, "*[2-D]", p2d.x - 8, p2d.y + 16);
 
-                Vec2i cnrVec = p1u + p1d + p2u + p2d;
-                Point cornerPoint(cnrVec[0] / 4, cnrVec[1] / 4);
+                Point cornerPoint = average4(p1u, p2u, p1d, p2d);
 
                 rectangle(debug, cornerPoint - Point(20, 20), cornerPoint + Point(20, 20), Scalar(0, 0, 255), 2);
                 DrawTextLeftCenterAutoColor(debug, "* CORNER", cornerPoint.x - 4, cornerPoint.y);
