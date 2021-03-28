@@ -7,8 +7,8 @@
 #include <cstring>
 #include "../util/common.h"
 
-#define DEFLECT_VALUE 50
-#define TRANSLATE_VALUE 50
+#define DEFLECT_VALUE 10
+#define TRANSLATE_VALUE 30
 
 #define DEBUG_PRINT_RX false
 
@@ -57,25 +57,47 @@ void AuvManager::reportAdsorbate(int id, int shape) {
     transactAndWaitForReply(0x10, (unsigned char) id, (unsigned char) shape);
 }
 
+float AuvManager::getBatteryVoltage() {
+    CmdPacket pk;
+    if (transactAndWaitForReply(0x21, 0, 0, 0, 0, &pk, true) == 0) {
+        unsigned char h = pk[4];
+        unsigned char l = pk[5];
+        int val = (h << 8 | l) & 0xFFFF;
+        return float(val) / 1000.0f;
+    } else {
+        float ret;
+        *((unsigned int *) &ret) = 0x7FFFFFFF;
+        return ret;
+    }
+}
+
 CmdPacket &AuvManager::updateChecksum(CmdPacket &pk) {
     pk[6] = (char) (pk[1] + pk[2] + pk[3] + pk[4] + pk[5]);
     return pk;
 }
 
-int AuvManager::transactAndWaitForReply(uchar cmd, uchar arg1, uchar arg2, uchar arg3, uchar arg4) {
+int AuvManager::transactAndWaitForReply(uchar cmd, uchar arg1, uchar arg2, uchar arg3, uchar arg4,
+                                        CmdPacket *reply, bool junk) {
     CmdPacket pk = {0x75, cmd, arg1, arg2, arg3, arg4, 0xFF};
     updateChecksum(pk);
-    return transactAndWaitForReply(pk);
+    return transactAndWaitForReply(pk, reply, junk);
 }
 
-int AuvManager::transactAndWaitForReply(const CmdPacket &pk) {
+int AuvManager::transactAndWaitForReply(const CmdPacket &pk, CmdPacket *reply, bool junk) {
+//    return 1;
     int maxWait = 5;
     int maxTry = 3;
     do {
         usart.transmit(pk, 7);
-        msleep(50);
+        msleep(30);
         CmdPacket resp = {};
         if (nextCmdPacketAsync(resp)) {
+            if (junk) {
+                do {
+                    maxWait--;
+                    msleep(10);
+                } while ((!nextCmdPacketAsync(resp)) && maxWait > 0);
+            }
             if (verifyChecksum(resp)) {
                 if (resp[1] != 0) {
                     printf("E: cmd 0x%02x(%d,%d,%d,%d) get invalid resp: 0x%02x(%d,%d,%d,%d)\n",
@@ -86,6 +108,9 @@ int AuvManager::transactAndWaitForReply(const CmdPacket &pk) {
                     if (resp[2] != 0) {
                         printf("I: cmd 0x%02x(%d,%d,%d,%d) result 0x%02x\n",
                                pk[1], pk[2], pk[3], pk[4], pk[5], resp[2]);
+                    }
+                    if (reply != nullptr) {
+                        memcpy(reply, resp, 7);
                     }
                     return resp[1];
                 }

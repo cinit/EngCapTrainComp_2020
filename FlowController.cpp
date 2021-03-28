@@ -21,12 +21,15 @@
 
 #define WINDOW_NAME "EngTrainUpperCtl"
 
-#define DEBUG_FF 50
+#define DEBUG_FF 100
 
 using namespace std;
 using namespace cv;
 
 bool SHOW_WINDOW = false;
+
+uint64_t gLastBatVolTime = 0;
+float gLastBatVolValue = 0;
 
 typedef struct {
     bool isTurningRight;
@@ -82,13 +85,20 @@ void findTubeAndAbsorbateLoop(cv::VideoCapture &video, AuvManager &auv, bool sho
     int frameCounter = 0;
     char text[64];
     while (true) {
+        uint64_t currTime = currentTimeMillis();
+        if (currTime - gLastBatVolTime > 1000) {
+            gLastBatVolTime = currTime;
+            gLastBatVolValue = auv.getBatteryVoltage();
+        }
         video >> rawFrame;
         if (rawFrame.empty()) {
             break;
         }
         frameCounter++;
         Mat debug = handleFrameAndSendCmdLoop(rawFrame, auv, status);
-        DrawTextLeftCenterAutoColor(debug, (sprintf(text, "Frame: %d", frameCounter), text), debug.rows - 48, 16);
+        DrawTextLeftCenterAutoColor(debug, (sprintf(text, "Battery: %0.3fV", gLastBatVolValue), text),
+                                    debug.rows - 48, 16);
+        DrawTextLeftCenterAutoColor(debug, (sprintf(text, "Frame: %d", frameCounter), text), debug.rows - 48, 32);
         if (SHOW_WINDOW) {
             imshow(WINDOW_NAME, debug);
             waitKey(DEBUG_FF);
@@ -105,7 +115,13 @@ Mat handleFrameAndSendCmdLoop(const Mat &src, AuvManager &auv, RunningStatus &st
     vector<String> dbg;
     GaussianBlur(src, tmp1, Size(5, 5), 3);
     TubeDetectResult tube = findTube(src, auv, status, debug, dbg);
-    RunningOperation operation;
+//    {
+//        // draw dbg
+//        if (tube.hasCorner) {
+//            if(tube.)
+//        }
+//    }
+    RunningOperation operation = NOT_FOUND;
     {
         if (tube.hasTube) {
             float deg = 57.3f * tube.tubeDirectionRad;
@@ -166,12 +182,12 @@ Mat handleFrameAndSendCmdLoop(const Mat &src, AuvManager &auv, RunningStatus &st
         if (operation == TURN_RIGHT) {
             status.isTurningRight = true;
             auv.goStraight();
-            if (SHOW_WINDOW) {
-                imshow(WINDOW_NAME, debug);
-                waitKey(1500);
-            } else {
-                msleep(1500);
-            }
+//            if (SHOW_WINDOW) {
+//                imshow(WINDOW_NAME, debug);
+//                waitKey(1500);
+//            } else {
+//                msleep(1500);
+//            }
             auv.turnRight();
         } else {
             switch (operation) {

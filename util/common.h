@@ -22,6 +22,8 @@
 /* sleep for ms */
 void msleep(int ms);
 
+uint64_t currentTimeMillis();
+
 typedef unsigned char uchar;
 
 #endif //ENGINEERTRAINUPPERCTL_COMMON_H

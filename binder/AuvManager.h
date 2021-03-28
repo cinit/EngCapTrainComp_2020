@@ -45,10 +45,13 @@ public:
     //shape: 吸附物形状 (1.方形 2.圆形)
     void reportAdsorbate(int id, int shape);
 
-protected:
-    int transactAndWaitForReply(const CmdPacket &pk);
+    float getBatteryVoltage();
 
-    int transactAndWaitForReply(uchar cmd, uchar arg1 = 0, uchar arg2 = 0, uchar arg3 = 0, uchar arg4 = 0);
+protected:
+    int transactAndWaitForReply(const CmdPacket &pk, CmdPacket *reply = nullptr, bool junk = false);
+
+    int transactAndWaitForReply(uchar cmd, uchar arg1 = 0, uchar arg2 = 0, uchar arg3 = 0, uchar arg4 = 0,
+                                CmdPacket *reply = nullptr, bool junk = false);
 
     static CmdPacket &updateChecksum(CmdPacket &pk);
 

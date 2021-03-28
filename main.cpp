@@ -34,6 +34,6 @@ int main() {
 //        capture.set(CAP_PROP_FPS, 10);
     }
     AuvManager auv(usart);
-    msleep(100);
+//    auv.stop();
     findTubeAndAbsorbateLoop(capture, auv, true);
 }
