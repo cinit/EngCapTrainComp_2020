@@ -30,6 +30,7 @@ bool SHOW_WINDOW = false;
 
 typedef struct {
     bool isTurningRight;
+    int cornerCounter;
 } RunningStatus;
 
 enum RunningOperation {
@@ -43,12 +44,14 @@ enum RunningOperation {
 };
 
 typedef struct {
-    int imgHeight;
     int imgWidth;
+    int imgHeight;
     bool hasTube;
     int tubeBottomX;
-    //dx/dy
-    float tubeScopeFactor;
+    // left- right+
+    float tubeDirectionRad;
+    // dx/dy, gt 0, usually 0.x
+    float tubeParallelPerspectiveSlope;
     bool hasCorner;
     Point cornerPosition;
 } TubeDetectResult;
@@ -98,12 +101,61 @@ void findTubeAndAbsorbateLoop(cv::VideoCapture &video, AuvManager &auv, bool sho
 Mat handleFrameAndSendCmdLoop(const Mat &src, AuvManager &auv, RunningStatus &status) {
     Mat tmp1;
     Mat debug = src.clone();
+    char buf[64];
     vector<String> dbg;
     GaussianBlur(src, tmp1, Size(5, 5), 3);
     TubeDetectResult tube = findTube(src, auv, status, debug, dbg);
     RunningOperation operation;
     {
-        //TODO tube2op
+        if (tube.hasTube) {
+            float deg = 57.3f * tube.tubeDirectionRad;
+            dbg.emplace_back((sprintf(buf, "Tdeg: %+0.1f", deg), buf));
+            // [-1.0f,1.0f]
+            float relPosX = float(2.0f * (float) tube.tubeBottomX / (float) tube.imgWidth) - 1.0f;
+            dbg.emplace_back((sprintf(buf, "Xrel: %+0.2f", relPosX), buf));
+            if (deg < -5) {
+                operation = DRIFT_RIGHT;
+            } else if (deg > 5) {
+                operation = DRIFT_LEFT;
+            } else if (relPosX < -0.25) {
+                operation = TRANSLATE_LEFT;
+            } else if (relPosX > 0.25) {
+                operation = TRANSLATE_RIGHT;
+            } else {
+                operation = GO_STRAIGHT;
+            }
+            if (tube.hasCorner) {
+                // [0.0f,1.0f]
+                float relCornerY = float((float) tube.cornerPosition.y / (float) tube.imgHeight);
+                dbg.emplace_back((sprintf(buf, "Y_rc: %0.2f", relCornerY), buf));
+                if (relCornerY > 0.5) {
+                    operation = TURN_RIGHT;
+                }
+            }
+        }
+    }
+    switch (operation) {
+        case NOT_FOUND:
+            dbg.emplace_back("NOT_FOUND");
+            break;
+        case GO_STRAIGHT:
+            dbg.emplace_back("GO_STRAIGHT");
+            break;
+        case DRIFT_LEFT:
+            dbg.emplace_back("DRIFT_LEFT");
+            break;
+        case DRIFT_RIGHT:
+            dbg.emplace_back("DRIFT_RIGHT");
+            break;
+        case TRANSLATE_LEFT:
+            dbg.emplace_back("TRANSLATE_LEFT");
+            break;
+        case TRANSLATE_RIGHT:
+            dbg.emplace_back("TRANSLATE_RIGHT");
+            break;
+        case TURN_RIGHT:
+            dbg.emplace_back("TURN_RIGHT");
+            break;
     }
     if (status.isTurningRight) {
         if (operation != TURN_RIGHT && operation != NOT_FOUND) {
@@ -429,7 +481,7 @@ TubeDetectResult findTube(const Mat &src, AuvManager &auv, RunningStatus &status
 //    drawContours(debug, contours, tubeContourIdx, Scalar(0, 0, 255), 1, 8);
     if (contours.empty()) {
         dbg.emplace_back("contours.empty(): NO CONTOUR FOUND");
-        return TubeDetectResult{src.cols, src.rows, false, 0, 0, false};
+        return TubeDetectResult{src.cols, src.rows, false, 0, 0, 0, false};
     }
     vector<Point> pipeContour = contours[tubeContourIdx];
     std::vector<Point> tubeApprox;
@@ -465,7 +517,7 @@ TubeDetectResult findTube(const Mat &src, AuvManager &auv, RunningStatus &status
     if (outlineLeft.empty() || outlineRight.empty()) {
         !outlineLeft.empty() || (dbg.emplace_back("Outline left empty"), false);
         !outlineRight.empty() || (dbg.emplace_back("Outline right empty"), false);
-        return TubeDetectResult{src.cols, src.rows, false, 0, 0, false};
+        return TubeDetectResult{src.cols, src.rows, false, 0, 0, 0, false};
     } else {
         drawPath(debug, outlineLeft, Scalar(255, 255, 255), 2, 8);
         drawPath(debug, outlineRight, Scalar(255, 255, 255), 2, 8);
@@ -506,15 +558,14 @@ TubeDetectResult findTube(const Mat &src, AuvManager &auv, RunningStatus &status
                 DrawTextLeftCenterAutoColor(debug, "*[1-D]", p1d.x - 8, p1d.y + 16);
                 DrawTextLeftCenterAutoColor(debug, "*[2-U]", p2u.x - 32, p2u.y + 16);
                 DrawTextLeftCenterAutoColor(debug, "*[2-D]", p2d.x - 8, p2d.y + 16);
-
                 Point cornerPoint = average4(p1u, p2u, p1d, p2d);
-
                 rectangle(debug, cornerPoint - Point(20, 20), cornerPoint + Point(20, 20), Scalar(0, 0, 255), 2);
                 DrawTextLeftCenterAutoColor(debug, "* CORNER", cornerPoint.x - 4, cornerPoint.y);
-
                 dbg.emplace_back((sprintf(buf, "Corner(%d,%d)", cornerPoint.x, cornerPoint.y), buf));
-
-                return TubeDetectResult{src.cols, src.rows, true, (p1.x + p2.x) / 2,
+                int centerBottom = (p1.x + p2.x) / 2;
+                Vec2f directionVec = basify(Vec2f(cornerPoint.x - centerBottom, cornerPoint.y - src.rows));
+                float rad = asin(directionVec[0]);
+                return TubeDetectResult{src.cols, src.rows, true, centerBottom, rad,
                                         (float(p1d.x - p1.x) / float(p1d.y - p1.y) +
                                          float(p2d.x - p2.x) / float(p2d.y - p2.y)) / 2.0f,
                                         true, cornerPoint};
@@ -522,7 +573,11 @@ TubeDetectResult findTube(const Mat &src, AuvManager &auv, RunningStatus &status
                 DrawTextLeftCenterAutoColor(debug, "*[R-LAST]", lastDownRight.x - 8, lastDownRight.y + 16);
                 DrawTextLeftCenterAutoColor(debug, "*[L-LAST]", lastDownLeft.x - 8, lastDownLeft.y + 16);
                 dbg.emplace_back("Corner not found");
-                return TubeDetectResult{src.cols, src.rows, true, (p1.x + p2.x) / 2,
+                int centerBottom = (p1.x + p2.x) / 2;
+                Vec2i tmp = lastDownRight + lastDownLeft;
+                Vec2f directionVec = basify(Vec2f(tmp[0] / 2 - centerBottom, tmp[1] / 2 - src.rows));
+                float rad = asin(directionVec[0]);
+                return TubeDetectResult{src.cols, src.rows, true, centerBottom, rad,
                                         (float(lastDownLeft.x - p1.x) / float(lastDownLeft.y - p1.y) +
                                          float(lastDownRight.x - p2.x) / float(lastDownRight.y - p2.y)) / 2.0f, false};
             }
