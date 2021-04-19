@@ -32,19 +32,15 @@ uint64_t gLastBatVolTime = 0;
 float gLastBatVolValue = 0;
 
 typedef struct {
-    bool isTurningRight;
+//    bool isTurningRight;
     int cornerCounter;
 } RunningStatus;
 
-enum RunningOperation {
-    NOT_FOUND,
-    GO_STRAIGHT,
-    DRIFT_LEFT,
-    DRIFT_RIGHT,
-    TRANSLATE_LEFT,
-    TRANSLATE_RIGHT,
-    TURN_RIGHT,
-};
+typedef struct {
+    bool found;
+    float deltaX;
+    float deltaYaw;
+} TubeDetectionError;
 
 typedef struct {
     int imgWidth;
@@ -62,6 +58,64 @@ typedef struct {
 Mat handleFrameAndSendCmdLoop(const Mat &src, AuvManager &auv, RunningStatus &status);
 
 TubeDetectResult findTube(const Mat &src, AuvManager &auv, RunningStatus &status, Mat &debug, vector<String> &dbg);
+
+vector<Point> getSamplePoints(const Mat &src, Mat &debug, vector<String> &dbg, int roi_all);
+
+// 核心代码, 求斜率w,截距b
+bool fit(const vector<Point> &points, Vec2f &out) {
+    int m = points.size();
+    if (m < 3) {
+        return false;
+    }
+    float x_bar = [&points] {
+        float sum = 0;
+        for (auto &p:points) {
+            sum += float(p.y);
+        }
+        return sum / float(points.size());
+    }();
+    int sum_yx = 0;
+    int sum_x2 = 0;
+    int sum_delta = 0;
+    for (int i = 0; i < m; i++) {
+        int y = points[i].x;
+        int x = points[i].y;
+        sum_yx += y * (x - x_bar);
+        sum_x2 += pow(x, 2);
+    }
+    // 根据公式计算w
+    float w = sum_yx / (sum_x2 - m * pow(x_bar, 2));
+    for (int i = 0; i < m; i++) {
+        int y = points[i].x;
+        int x = points[i].y;
+        sum_delta += (y - w * x);
+    }
+    float b = sum_delta / m;
+    out = Vec2f(w, b);
+    return true;
+}
+
+TubeDetectionError findTubeLsm(const Mat &src, AuvManager &auv, RunningStatus &status,
+                               Mat &debug, vector<String> &dbg) {
+    vector<Point> points = getSamplePoints(src, debug, dbg, 20);
+    Vec2f wb;
+    if (fit(points, wb)) {
+        float w = wb[0];
+        float b = wb[1];
+        line(debug, Point(b, 0), Point(int(float(src.rows) * w + b), src.rows), Scalar(0, 255, 0), 2);
+        float deltaX = int(float(src.rows / 2) * w + b) - src.cols / 2;
+        float rad = atan(w);
+        //因为摄像头是斜的不是垂直朝下的,所以给角度一个简单的比例放大
+        if (rad >= 0) {
+            rad = pow(rad, 0.75) * 3;
+        } else {
+            rad = -(pow(-rad, 0.75) * 3);
+        }
+        return TubeDetectionError{true, deltaX, -rad};
+    } else {
+        return TubeDetectionError{false, 0, 0};
+    }
+}
 
 bool isPointOnDownBorder(const Point &p, const Mat &mat) {
     int height = mat.rows;
@@ -84,28 +138,88 @@ void findTubeAndAbsorbateLoop(cv::VideoCapture &video, AuvManager &auv, bool sho
     RunningStatus status = {};
     int frameCounter = 0;
     char text[64];
+    if (showWindow) {
+        namedWindow(WINDOW_NAME);
+        startWindowThread();
+    }
     while (true) {
         uint64_t currTime = currentTimeMillis();
         if (currTime - gLastBatVolTime > 1000) {
             gLastBatVolTime = currTime;
             gLastBatVolValue = auv.getBatteryVoltage();
         }
+        uint64 t1 = currentTimeMillis();
         video >> rawFrame;
         if (rawFrame.empty()) {
             break;
         }
+        uint64 t2 = currentTimeMillis();
         frameCounter++;
         Mat debug = handleFrameAndSendCmdLoop(rawFrame, auv, status);
         DrawTextLeftCenterAutoColor(debug, (sprintf(text, "Battery: %0.3fV", gLastBatVolValue), text),
                                     debug.rows - 48, 16);
         DrawTextLeftCenterAutoColor(debug, (sprintf(text, "Frame: %d", frameCounter), text), debug.rows - 48, 32);
+        DrawTextLeftCenterAutoColor(debug, (sprintf(text,
+                                                    "select cost: %dms", int(t2 - t1)), text), debug.rows - 48, 48);
         if (SHOW_WINDOW) {
             imshow(WINDOW_NAME, debug);
-            waitKey(DEBUG_FF);
-        } else {
-            msleep(100);
+            int code = waitKey(1);
+            if (code == 'q' || code == 'Q') {
+                auv.stop();
+                msleep(20);
+                auv.rtlControlMotionOutput(0, 0, 0, 0);
+                msleep(20);
+                auv.stop();
+                msleep(20);
+                auv.rtlControlMotionOutput(0, 0, 0, 0);
+                msleep(20);
+                return;
+            }
+        }
+        printf("%d,", frameCounter);
+        cout.flush();
+        msleep(DEBUG_FF);
+    }
+}
+
+TubeDetectionError fallbackSeekForOperation(const Mat &src, AuvManager &auv, RunningStatus &status,
+                                            Mat &debug, vector<String> &dbg) {
+    char buf[64];
+    float sampleRelativeY = 0.3;
+    int samplePointTotal = 9;
+    int delta = src.cols / (samplePointTotal + 1);
+    int values[samplePointTotal];
+    int posY = int(sampleRelativeY * float(src.rows));
+    for (int i = 0; i < samplePointTotal; ++i) {
+        char *pp;
+        unsigned char r, g, b;
+        pp = (char *) ((int64_t) src.data + (int64_t) src.step.buf[0] * posY +
+                       (int64_t) src.step.buf[1] * (delta + delta * i));
+        r = pp[0] & 0xFF;
+        g = pp[1] & 0xFF;
+        b = pp[2] & 0xFF;
+        values[i] = r + g + b;
+    }
+    int currIdx = -1;
+    int currMax = samplePointTotal / 2;
+    for (int j = 0; j < samplePointTotal; ++j) {
+        if (currMax < values[j]) {
+            currMax = values[j];
+            currIdx = j;
         }
     }
+    int tubeX = delta * (currIdx + 1);
+    Point detectPoint(tubeX, posY);
+    rectangle(debug, detectPoint - Point(20, 20), detectPoint + Point(20, 20), Scalar(0, 0, 255), 2);
+    DrawTextLeftCenterAutoColor(debug, "FALLBACK", detectPoint.x - 20, detectPoint.y + 32);
+    dbg.emplace_back((sprintf(buf, "Fallback(%d,%d)", tubeX, posY), buf));
+    if (currIdx < samplePointTotal / 2 - 1) {
+        return TubeDetectionError{true, float(detectPoint.x - src.cols / 2), 0};
+    }
+    if (currIdx > samplePointTotal / 2 + 1) {
+        return TubeDetectionError{true, float(detectPoint.x - src.cols / 2), 0};
+    }
+    return TubeDetectionError{false, 0, 0};
 }
 
 Mat handleFrameAndSendCmdLoop(const Mat &src, AuvManager &auv, RunningStatus &status) {
@@ -113,6 +227,7 @@ Mat handleFrameAndSendCmdLoop(const Mat &src, AuvManager &auv, RunningStatus &st
     Mat debug = src.clone();
     char buf[64];
     vector<String> dbg;
+    dbg.emplace_back((sprintf(buf, "%dx%d", src.cols, src.rows), buf));
     GaussianBlur(src, tmp1, Size(5, 5), 3);
     TubeDetectResult tube = findTube(src, auv, status, debug, dbg);
 //    {
@@ -121,98 +236,33 @@ Mat handleFrameAndSendCmdLoop(const Mat &src, AuvManager &auv, RunningStatus &st
 //            if(tube.)
 //        }
 //    }
-    RunningOperation operation = NOT_FOUND;
-    {
-        if (tube.hasTube) {
-            float deg = 57.3f * tube.tubeDirectionRad;
-            dbg.emplace_back((sprintf(buf, "Tdeg: %+0.1f", deg), buf));
-            // [-1.0f,1.0f]
-            float relPosX = float(2.0f * (float) tube.tubeBottomX / (float) tube.imgWidth) - 1.0f;
-            dbg.emplace_back((sprintf(buf, "Xrel: %+0.2f", relPosX), buf));
-            if (deg < -5) {
-                operation = DRIFT_RIGHT;
-            } else if (deg > 5) {
-                operation = DRIFT_LEFT;
-            } else if (relPosX < -0.25) {
-                operation = TRANSLATE_LEFT;
-            } else if (relPosX > 0.25) {
-                operation = TRANSLATE_RIGHT;
-            } else {
-                operation = GO_STRAIGHT;
-            }
-            if (tube.hasCorner) {
-                // [0.0f,1.0f]
-                float relCornerY = float((float) tube.cornerPosition.y / (float) tube.imgHeight);
-                dbg.emplace_back((sprintf(buf, "Y_rc: %0.2f", relCornerY), buf));
-                if (relCornerY > 0.5) {
-                    operation = TURN_RIGHT;
-                }
+    TubeDetectionError tubeError = {false, 0, 0};
+    if (false) {
+        {
+            if (tube.hasTube) {
+                float deg = 57.3f * tube.tubeDirectionRad;
+                dbg.emplace_back((sprintf(buf, "Tdeg: %+0.1f", deg), buf));
+                // [-1.0f,1.0f]
+                float relPosX = float(2.0f * (float) tube.tubeBottomX / (float) tube.imgWidth) - 1.0f;
+                dbg.emplace_back((sprintf(buf, "Xrel: %+0.2f", relPosX), buf));
+                tubeError.found = true;
+                tubeError.deltaX = float(tube.tubeBottomX - src.cols / 2);
+                tubeError.deltaYaw = tube.tubeDirectionRad * 57.3f;
             }
         }
-    }
-    switch (operation) {
-        case NOT_FOUND:
-            dbg.emplace_back("NOT_FOUND");
-            break;
-        case GO_STRAIGHT:
-            dbg.emplace_back("GO_STRAIGHT");
-            break;
-        case DRIFT_LEFT:
-            dbg.emplace_back("DRIFT_LEFT");
-            break;
-        case DRIFT_RIGHT:
-            dbg.emplace_back("DRIFT_RIGHT");
-            break;
-        case TRANSLATE_LEFT:
-            dbg.emplace_back("TRANSLATE_LEFT");
-            break;
-        case TRANSLATE_RIGHT:
-            dbg.emplace_back("TRANSLATE_RIGHT");
-            break;
-        case TURN_RIGHT:
-            dbg.emplace_back("TURN_RIGHT");
-            break;
-    }
-    if (status.isTurningRight) {
-        if (operation != TURN_RIGHT && operation != NOT_FOUND) {
-            status.isTurningRight = false;
-            auv.goStraight();
+        if (!tubeError.found) {
+            tubeError = fallbackSeekForOperation(src, auv, status, debug, dbg);
         }
     } else {
-        if (operation == TURN_RIGHT) {
-            status.isTurningRight = true;
-            auv.goStraight();
-//            if (SHOW_WINDOW) {
-//                imshow(WINDOW_NAME, debug);
-//                waitKey(1500);
-//            } else {
-//                msleep(1500);
-//            }
-            auv.turnRight();
-        } else {
-            switch (operation) {
-                case GO_STRAIGHT: {
-                    auv.goStraight();
-                    break;
-                }
-                case DRIFT_LEFT: {
-                    auv.deflectLeft();
-                    break;
-                }
-                case DRIFT_RIGHT: {
-                    auv.deflectRight();
-                    break;
-                }
-                case TRANSLATE_LEFT: {
-                    auv.translateLeft();
-                    break;
-                }
-                case TRANSLATE_RIGHT: {
-                    auv.translateRight();
-                    break;
-                }
-            }
-        }
+        tubeError = findTubeLsm(src, auv, status, debug, dbg);
+    }
+    if (tubeError.found) {
+        float refs[4];
+        auv.updateCurrentError(tubeError.deltaX, tubeError.deltaYaw * 57.3f, &refs);
+        dbg.emplace_back((sprintf(buf, "  Xo: %+.1f", refs[0]), buf));
+        dbg.emplace_back((sprintf(buf, "  Yo: %+.1f", refs[1]), buf));
+        dbg.emplace_back((sprintf(buf, "  Zo: %+.1f", refs[2]), buf));
+        dbg.emplace_back((sprintf(buf, "  Wo: %+.1f", refs[3]), buf));
     }
     if (SHOW_WINDOW) {
         DrawTextLeftCenterAutoColor(debug, "+-----------+ 100px", 16, debug.rows - 32);
@@ -350,6 +400,61 @@ Vec2f basify(const Vec2f &v) {
 
 Vec2f basify(const Vec2i &v) {
     return basify(Vec2f(v[0], v[1]));
+}
+
+void find_blob(int roi_i, int roi_num, const Mat &binary,
+               vector<vector<Point>> &contours, Rect &roi, Mat *debug = nullptr) {
+    int width = binary.cols;
+    int height = binary.rows;
+    roi = Rect(0, roi_i * height / roi_num, width, height / roi_num);
+    Mat roi_img_binary = binary(roi);
+    contours.clear();
+    findContours(roi_img_binary, contours, RETR_EXTERNAL, CHAIN_APPROX_SIMPLE);
+    if (debug != nullptr) {
+        drawContours((*debug)(roi), contours, -1, Scalar(0, 0, 0), 1);
+    }
+}
+
+vector<Point> getSamplePoints(const Mat &src, Mat &debug, vector<String> &dbg, int roi_all) {
+    vector<Point> points;
+    Mat lab;
+    cvtColor(src, lab, COLOR_BGR2Lab);// 综合对比发现lab能够很快的分辨出红色圆圈
+    Mat lab_frame;
+    inRange(lab, Scalar(165, 0, 108), Scalar(255, 255, 255), lab_frame);
+    Mat close;
+    morphologyEx(lab_frame, close, MORPH_CLOSE, getStructuringElement(MORPH_ELLIPSE, Size(13, 13)));
+    for (int i = 0; i < roi_all; i++) {
+        vector<vector<Point>> contour;
+        Rect roi;
+        find_blob(i, roi_all, close, contour, roi, &debug);
+        if (contour.size() == 1) {
+            // 通过blob面积与矩形和三角形的面积进行比较来过滤
+            Rect r = boundingRect(contour[0]);
+            int area_rect = r.width * r.height;
+            int area_half = area_rect / 2;
+            double area = contourArea(contour[0]);
+            if (abs(area_rect - area) < abs(area - area_half)) {
+                pass;
+            } else {
+                continue;
+            }
+            // 通过判断blob的宽度来过滤
+            if (r.width > src.cols * 0.7) {
+                continue;
+            }
+            Moments M = moments(contour[0]);
+            if (M.m00 != 0) {
+                int cX = int(M.m10 / M.m00);
+                int cY = int(M.m01 / M.m00);
+                Point p = Point(cX, cY) + roi.tl();
+                circle(debug, p, 2, Scalar(255, 0, 0), -1);
+                points.emplace_back(p);
+            } else {
+                pass;
+            }
+        }
+    }
+    return points;
 }
 
 vector<Point> followStraightDown(const vector<Point> &outline, const Point &start, Nullable Point *lastPoint) {
@@ -494,7 +599,7 @@ TubeDetectResult findTube(const Mat &src, AuvManager &auv, RunningStatus &status
             tubeContourIdx = i;
         }
     }
-//    drawContours(debug, contours, tubeContourIdx, Scalar(0, 0, 255), 1, 8);
+    drawContours(debug, contours, tubeContourIdx, Scalar(0, 0, 255), 1, 8);
     if (contours.empty()) {
         dbg.emplace_back("contours.empty(): NO CONTOUR FOUND");
         return TubeDetectResult{src.cols, src.rows, false, 0, 0, 0, false};

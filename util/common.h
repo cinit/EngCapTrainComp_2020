@@ -7,6 +7,8 @@
 
 #include "stdint.h"
 
+#define pass ((void)0)
+
 #if defined(__GNUC__)
 
 #define Nullable

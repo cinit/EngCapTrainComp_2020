@@ -9,6 +9,7 @@
 #include <unistd.h>
 #include <cstring>
 #include <iostream>
+#include "error.h"
 
 #define BIT_RATE B9600
 
@@ -19,6 +20,8 @@ LinuxSerial::LinuxSerial(const char *name) {
     //O_NONBLOCK设置为非阻塞模式，在read时不会阻塞住，在读的时候将read放在while循环中，下一节篇文档将详细讲解阻塞和非阻塞
     printf("fd=%d\n", serialFd);
     if (serialFd == -1) {
+        int err = errno;
+        printf("errno(%d):%s\n", err, strerror(err));
         perror("Can't Open SerialPort");
         return;
     }
