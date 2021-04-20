@@ -28,6 +28,8 @@ link_directories("/usr/local/lib")   # libraray search path
 # 指定从哪些源代码文件中生成exe或lib
 # add_library(target source1, source2...)                 # compiler sources to a library named target, not a exe
 
+set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Werror=return-type")
+
 set(SOURCE_FILES ui/Widgets.cpp ui/VgaFont.cpp ui/Fixedsys.c main.cpp binder/AuvManager.cpp binder/LinuxSerial.cpp binder/SerialInterface.cpp FlowController.cpp util/PidF.cpp util/common.cpp)
 
 add_executable(EngineerTrainUpperCtl ${SOURCE_FILES})         # compiler sources to a exe named target, not a library
