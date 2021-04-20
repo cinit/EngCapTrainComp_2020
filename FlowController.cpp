@@ -253,6 +253,51 @@ vector<Rect> findAbsorbates(const Mat &src, AuvManager &auv, RunningStatus &stat
     return results;
 }
 
+Rect getContainingSquareRect(const Rect &target, const Rect &container) {
+    if (target.width == target.height) {
+        return target;
+    } else if (target.width > target.height) {
+        //fat
+        int delta = abs(target.height - target.width);
+        int len = target.width;
+        int da = delta / 2;
+        int db = delta - da;
+        int start = target.y - da;
+        if (start + len > container.height) {
+            start = container.height - len;
+        }
+        if (start < 0) {
+            start = 0;
+        }
+        return {target.x, start, len, len};
+    } else {
+        //tall
+        int delta = abs(target.height - target.width);
+        int len = target.height;
+        int da = delta / 2;
+        int db = delta - da;
+        int start = target.x - da;
+        if (start + len > container.width) {
+            start = container.width - len;
+        }
+        if (start < 0) {
+            start = 0;
+        }
+        return {start, target.y, len, len};
+    }
+}
+
+Rect inflateRectBy(const Rect &target, const Rect &container, float ratio) {
+    ratio /= 2.0;
+    int dx = int(float(target.width) * ratio);
+    int dy = int(float(target.height) * ratio);
+    int startx = max(target.x - dx, 0);
+    int starty = max(target.y - dy, 0);
+    int endx = min(target.x + target.width + dx, container.width);
+    int endy = min(target.y + target.height + dy, container.height);
+    return {startx, starty, endx - startx, endy - starty};
+}
+
 Mat handleFrameAndSendCmdLoop(const Mat &src, AuvManager &auv, RunningStatus &status) {
     Mat tmp1;
     Mat debug = src.clone();
@@ -294,7 +339,14 @@ Mat handleFrameAndSendCmdLoop(const Mat &src, AuvManager &auv, RunningStatus &st
         dbg.emplace_back((sprintf(buf, "  Yo: %+.1f", refs[1]), buf));
         dbg.emplace_back((sprintf(buf, "  Zo: %+.1f", refs[2]), buf));
         dbg.emplace_back((sprintf(buf, "  Wo: %+.1f", refs[3]), buf));
-        findAbsorbates(src, auv, status, debug, dbg);
+        vector<Rect> absorbates = findAbsorbates(src, auv, status, debug, dbg);
+        vector<Rect> rectAbs;
+        Rect full = Rect(0, 0, src.cols, src.rows);
+        for (auto &ra:absorbates) {
+            Rect r = getContainingSquareRect(inflateRectBy(ra, full, 0.1f), full);
+            rectAbs.emplace_back(r);
+            rectangle(debug, r, Scalar(0, 0, 255));
+        }
     }
     if (SHOW_WINDOW) {
         DrawTextLeftCenterAutoColor(debug, "+-----------+ 100px", 16, debug.rows - 32);
