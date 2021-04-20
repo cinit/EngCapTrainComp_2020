@@ -10,11 +10,13 @@
 using namespace cv;
 using namespace std;
 
+#define DEBUG_MOTION 0
+
 int main() {
     LinuxSerial usart(SERIAL_DEV);
     if (!usart.isOpened()) {
         printf("open serial " SERIAL_DEV " failed\n");
-        return 1;
+//        return 1;
     }
     AuvManager auv(usart);
     float voltage = auv.getBatteryVoltage();
@@ -24,31 +26,32 @@ int main() {
     cout << "V_bat=" << voltage << endl;
 //    auv.rtlControlMotionOutput();
 //    return 0;
-
-
-//    VideoCapture capture("/home/kinit/Videos/AUV_00_h.mp4");
-//    VideoCapture capture("/home/kinit/Videos/AUV_00_l.mp4");
-//    capture.set(CAP_PROP_POS_FRAMES, 738);
-//    capture.set(CAP_PROP_POS_FRAMES, 438);
-    VideoCapture capture(2);
-    if (!capture.isOpened()) {
-        cout << "视频未打开" << endl;
-        exit(1);
+    if (!DEBUG_MOTION) {
+//        VideoCapture capture("/home/kinit/Videos/AUV_00_h.mp4");
+//        VideoCapture capture("/home/kinit/Videos/AUV_00_l.mp4");
+//        capture.set(CAP_PROP_POS_FRAMES, 738);
+//        capture.set(CAP_PROP_POS_FRAMES, 438);
+        VideoCapture capture(2);
+        if (!capture.isOpened()) {
+            cout << "视频未打开" << endl;
+            exit(1);
+        } else {
+            capture.set(CAP_PROP_FRAME_WIDTH, 640);
+            capture.set(CAP_PROP_FRAME_HEIGHT, 480);
+            capture.set(CAP_PROP_BUFFERSIZE, 1);
+        }
+        auv.setForwardVelocity(70);
+        findTubeAndAbsorbateLoop(capture, auv, true);
     } else {
-        capture.set(CAP_PROP_FRAME_WIDTH, 640);
-        capture.set(CAP_PROP_FRAME_HEIGHT, 480);
-        capture.set(CAP_PROP_BUFFERSIZE, 1);
+//        auv.rtlControlMotionOutput(0, 0, 0, 0);
+//        msleep(20);
+//        auv.stop();
+//        msleep(20)
+//        auv.rtlControlMotionOutput(0, 0, 0, 0);
+//        msleep(20);
+//        auv.stop();
+        auv.rtlControlMotionOutput(100, 100, 0, 0);
+        msleep(6000);
+        auv.rtlControlMotionOutput(0, 0, 0, 0);
     }
-//    auv.rtlControlMotionOutput(0, 0, 0, 0);
-//    msleep(20);
-//    auv.stop();
-//    msleep(20)
-//    auv.rtlControlMotionOutput(0, 0, 0, 0);
-//    msleep(20);
-//    auv.stop();
-//    auv.setForwardVelocity(70);
-    auv.rtlControlMotionOutput(40, 0, 0, 0);
-    msleep(5000);
-    auv.rtlControlMotionOutput(0, 0, 0, 0);
-//    findTubeAndAbsorbateLoop(capture, auv, true);
 }
