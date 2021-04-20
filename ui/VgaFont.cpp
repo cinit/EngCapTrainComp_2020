@@ -54,6 +54,11 @@ RasterGlyph::renderGlyphAutoColor(const cv::Mat &canvas, RasterGlyph glyph, int 
     int w = glyph.valid > 8 ? 16 : 8;
     int b;
     char *pp;
+    pp = (char *) ((int64_t) canvas.data + (int64_t) canvas.step.buf[0] * (sty + 6 * pxw) +
+                   (int64_t) canvas.step.buf[1] * (stx + 0 * pxw));
+    char c1 = ((pp[0] & 0xFF) > 128) ? 0 : 255;
+    char c2 = ((pp[1] & 0xFF) > 128) ? 0 : 255;
+    char c3 = ((pp[2] & 0xFF) > 128) ? 0 : 255;
     for (int a = 0; a </* glyph.data.length*/16; a++) {
         for (b = 0; b < w; b++) {
             if ((1 & glyph.data[a] >> (w - b - 1)) != 0) {
@@ -62,9 +67,9 @@ RasterGlyph::renderGlyphAutoColor(const cv::Mat &canvas, RasterGlyph glyph, int 
                                (int64_t) canvas.step.buf[1] * (stx + b * pxw));
                 if (((uint64) pp) >= ((uint64_t) canvas.datastart) &&
                     ((uint64) pp + 2) < ((uint64_t) canvas.dataend)) {
-                    pp[0] = ((pp[0] & 0xFF) > 128) ? 0 : 255;
-                    pp[1] = ((pp[1] & 0xFF) > 128) ? 0 : 255;
-                    pp[2] = ((pp[2] & 0xFF) > 128) ? 0 : 255;
+                    pp[0] = c1;
+                    pp[1] = c2;
+                    pp[2] = c3;
                 }
             }
         }
