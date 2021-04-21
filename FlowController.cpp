@@ -17,7 +17,8 @@
 #include "binder/AuvManager.h"
 #include "util/common.h"
 #include "random"
-
+#include "DataSetGenerator.h"
+#include "ipc/ClassificationManager.h"
 #include "iostream"
 
 #define WINDOW_NAME "EngTrainUpperCtl"
@@ -34,7 +35,8 @@ float gLastBatVolValue = 0;
 
 typedef struct {
 //    bool isTurningRight;
-    int cornerCounter;
+//    int cornerCounter;
+    bool hasAbsorbateNow;
 } RunningStatus;
 
 typedef struct {
@@ -133,15 +135,19 @@ bool isPointOnRightBorder(const Point &p, const Mat &mat) {
     return p.x > width - 10;
 }
 
+int g_thres_v_up = 142;
+
 void findTubeAndAbsorbateLoop(cv::VideoCapture &video, AuvManager &auv, bool showWindow) {
     SHOW_WINDOW = showWindow;
     Mat rawFrame;
     RunningStatus status = {};
+    status.hasAbsorbateNow = false;
     int frameCounter = 0;
     char text[64];
     if (showWindow) {
-        namedWindow(WINDOW_NAME);
         startWindowThread();
+        namedWindow(WINDOW_NAME);
+        createTrackbar("hsv_up", WINDOW_NAME, &g_thres_v_up, 255);
     }
     while (true) {
         uint64_t currTime = currentTimeMillis();
@@ -227,27 +233,44 @@ vector<Rect> findAbsorbates(const Mat &src, AuvManager &auv, RunningStatus &stat
     Mat rawCsv;
     char buf[64];
     cvtColor(src, rawCsv, COLOR_BGR2HSV);// 综合对比发现lab能够很快的分辨出红色圆圈
+    {
+        int deltaX = src.cols / 11;
+        int deltaY = src.rows / 11;
+        int vsum, ssum = 0;
+        for (int i = 0; i < 10; i++) {
+            for (int j = 0; j < 10; j++) {
+                uint32_t hsv = src.at<uint32_t>(deltaY / 2 + i * deltaY, deltaX / 2 + i * deltaX);
+                ssum += ((hsv >> 16) & 0xFF);
+                vsum += ((hsv >> 24) & 0xFF);
+            }
+        }
+        float savg = float(ssum) / 100.0f;
+        float havg = float(vsum) / 100.0f;
+        dbg.emplace_back((sprintf(buf, "Savg=%.1f", savg), buf));
+        dbg.emplace_back((sprintf(buf, "Vavg=%.1f", havg), buf));
+    }
     Mat region;
-    inRange(rawCsv, Scalar(0, 0, 0), Scalar(255, 255, 150), region);
+    inRange(rawCsv, Scalar(0, 0, 0), Scalar(255, 255, g_thres_v_up), region);
     erode(region, region, getStructuringElement(MORPH_RECT, Size(3, 3)));
     dilate(region, region, getStructuringElement(MORPH_RECT, Size(5, 5)));
     vector<vector<Point>> contours;
     vector<Vec4i> hierarchy;
     findContours(region, contours, hierarchy, RETR_EXTERNAL, CHAIN_APPROX_SIMPLE);
-//    drawContours(debug, contours, -1, Scalar(0, 255, 0), 2);
+    drawContours(debug, contours, -1, Scalar(0, 255, 0), 1);
     std::random_device rd;
     vector<Rect> results;
+    int maxSingleLen = int(0.8 * min(src.cols, src.rows));
     for (auto &cnt:contours) {
         Rect rect = boundingRect(cnt);
         float alen = float(rect.height + rect.width) / 2.0f;
         float area = contourArea(cnt);
         float duty = area / (alen * alen);
-        if (duty < 0.5) {
+        if (duty < 0.5 || alen * 1.3 > maxSingleLen || alen < 20) {
             continue;
         }
         Scalar color(rd() & 0xFF, rd() & 0xFF, rd() & 0xFF);
         rectangle(debug, rect, color, 2);
-        DrawTextLeftCenter(debug, (sprintf(buf, "%.3f", duty), buf), rect.x, rect.y - 10, color);
+//        DrawTextLeftCenter(debug, (sprintf(buf, "%.3f", duty), buf), rect.x, rect.y - 10, color);
         results.emplace_back(rect);
     }
     return results;
@@ -339,6 +362,8 @@ Mat handleFrameAndSendCmdLoop(const Mat &src, AuvManager &auv, RunningStatus &st
         dbg.emplace_back((sprintf(buf, "  Yo: %+.1f", refs[1]), buf));
         dbg.emplace_back((sprintf(buf, "  Zo: %+.1f", refs[2]), buf));
         dbg.emplace_back((sprintf(buf, "  Wo: %+.1f", refs[3]), buf));
+    }
+    {
         vector<Rect> absorbates = findAbsorbates(src, auv, status, debug, dbg);
         vector<Rect> rectAbs;
         Rect full = Rect(0, 0, src.cols, src.rows);
@@ -346,7 +371,26 @@ Mat handleFrameAndSendCmdLoop(const Mat &src, AuvManager &auv, RunningStatus &st
             Rect r = getContainingSquareRect(inflateRectBy(ra, full, 0.1f), full);
             rectAbs.emplace_back(r);
             rectangle(debug, r, Scalar(0, 0, 255));
+            ClassificationManager::Result result = ClassificationManager::classify(dsgResizeTo96(src, r));
+            const char *name;
+            switch (result.type) {
+                case ClassificationManager::TYPE_ROUND:
+                    name = "round";
+                    break;
+                case ClassificationManager::TYPE_SQUARE:
+                    name = "square";
+                    break;
+                default:
+                    name = "nothing";
+            }
+            DrawTextLeftCenterAutoColor(debug, (sprintf(buf, "%s %.3f", name, result.confidence), buf), r.x, r.y - 10);
+//            ClassificationManager::predict(dsgResizeTo96(src, r));
+//            dsgResizeAndSaveImg(src, r, "test");
+//            msleep(20);
         }
+        bool lastHasAbs = status.hasAbsorbateNow;
+        bool thisHasAbs = status.hasAbsorbateNow = !absorbates.empty();
+
     }
     if (SHOW_WINDOW) {
         DrawTextLeftCenterAutoColor(debug, "+-----------+ 100px", 16, debug.rows - 32);

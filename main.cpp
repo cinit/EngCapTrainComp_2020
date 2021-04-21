@@ -4,6 +4,7 @@
 #include "binder/LinuxSerial.h"
 #include "binder/AuvManager.h"
 #include "util/common.h"
+#include "ipc/ClassificationManager.h"
 
 #define SERIAL_DEV "/dev/ttyUSB0"
 
@@ -16,7 +17,7 @@ int main() {
     LinuxSerial usart(SERIAL_DEV);
     if (!usart.isOpened()) {
         printf("open serial " SERIAL_DEV " failed\n");
-//        return 1;
+        return 1;
     }
     AuvManager auv(usart);
     float voltage = auv.getBatteryVoltage();
@@ -24,9 +25,8 @@ int main() {
     voltage = auv.getBatteryVoltage();
     msleep(100);
     cout << "V_bat=" << voltage << endl;
-//    auv.rtlControlMotionOutput();
-//    return 0;
     if (!DEBUG_MOTION) {
+        ClassificationManager::connect();
 //        VideoCapture capture("/home/kinit/Videos/AUV_00_h.mp4");
 //        VideoCapture capture("/home/kinit/Videos/AUV_00_l.mp4");
 //        capture.set(CAP_PROP_POS_FRAMES, 738);
