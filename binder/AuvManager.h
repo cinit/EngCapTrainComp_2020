@@ -41,6 +41,8 @@ public:
     // value: [-100,100]
     void rtlControlMotionOutput(int dx, int dy, int dz, int dw);
 
+    void ntControlMotionOutput(int dx, int dy, int dz, int dw);
+
     //上位机告知下位机检测到漏点
     //id: 吸附物计数 (从1开始)
     //shape: 吸附物形状 (1.方形 2.圆形)

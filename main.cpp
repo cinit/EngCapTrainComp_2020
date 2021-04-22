@@ -40,7 +40,7 @@ int main() {
             capture.set(CAP_PROP_FRAME_HEIGHT, 480);
             capture.set(CAP_PROP_BUFFERSIZE, 1);
         }
-        auv.setForwardVelocity(70);
+        auv.setForwardVelocity(50);
         findTubeAndAbsorbateLoop(capture, auv, true);
     } else {
 //        auv.rtlControlMotionOutput(0, 0, 0, 0);
@@ -50,7 +50,11 @@ int main() {
 //        auv.rtlControlMotionOutput(0, 0, 0, 0);
 //        msleep(20);
 //        auv.stop();
-        auv.rtlControlMotionOutput(100, 100, 0, 0);
+
+//        auv.reportAdsorbate(2, AuvManager::SHAPE_RECTANGLE);
+
+//        auv.rtlControlMotionOutput(-100,0,0,-30);
+        auv.rtlControlMotionOutput(50,0, 0, 0);
         msleep(6000);
         auv.rtlControlMotionOutput(0, 0, 0, 0);
     }

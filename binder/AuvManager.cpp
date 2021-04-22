@@ -27,8 +27,8 @@ inline int in_range(int min, int value, int max) {
 
 AuvManager::AuvManager(SerialInterface &usart) :
         usart(usart),
-        translationY(0.3, 0, 0, 1000, 10),
-        rotationYaw(0.6, 0, 0.001, 1000, 10) {
+        translationY(0.2, 0, 0.001, 100, 10),
+        rotationYaw(0.43, 0, 0.01, 100, 10) {
 }
 
 AuvManager::AuvManager(AuvManager &that) = default;
@@ -46,11 +46,12 @@ void AuvManager::setForwardVelocity(int speed) {
 void AuvManager::updateCurrentError(int translationOffset, int degreeOffset, float (*outptr)[4]) {
     if (forwardSpeed != 0) {
         float outX = (float) forwardSpeed;
-        float outY = translationY.update((float) translationOffset);
+        float outY = in_range(-40, translationY.update((float) translationOffset), 40);
         float outZ = 0;
-        float outW = rotationYaw.update((float) degreeOffset);
-        int d = (in_range(0, std::abs(outY), 100) + in_range(0, std::abs(outW), 100)) / 2;
+        float outW = in_range(-50, rotationYaw.update((float) degreeOffset), 50);
+        int d = (in_range(0, std::abs(outY), 100) * 1.3f + in_range(0, std::abs(outW), 100)) / 4;
         outX -= d;
+        if (outX < 0)outX = 0;
         if (outptr != nullptr) {
             float *out = *outptr;
             out[0] = outX;
@@ -63,13 +64,31 @@ void AuvManager::updateCurrentError(int translationOffset, int degreeOffset, flo
 }
 
 // value: [-100,100]
-void AuvManager::rtlControlMotionOutput(int dx, int dy, int dz, int dw) {
+void AuvManager::ntControlMotionOutput(int dx, int dy, int dz, int dw) {
     dx = in_range(-100, dx, 100);
     dy = in_range(-100, dy, 100);
     dz = in_range(-100, dz, 100);
     dw = in_range(-100, dw, 100);
     transactAndWaitForReply(0x30, (unsigned char) (dx + 100), (unsigned char) (dy + 100),
                             (unsigned char) (dz + 100), (unsigned char) (dw + 100));
+}
+
+float getOffsetW(float x, float y) {
+    if (x <= 0) { return 0; }
+    float sig = (y >= 0 ? 1.0f : -1.0f);
+    if (y < 0) {
+        y = -y;
+    }
+    return (0.393336424f * x +
+            0.380830634f * y +
+            -0.010323333f * x * x +
+            -0.010712402f * y * y +
+            0.022120533f * x * y) * sig;
+}
+
+// value: [-100,100]
+void AuvManager::rtlControlMotionOutput(int dx, int dy, int dz, int dw) {
+    ntControlMotionOutput(dx, dy, dz, dw + 1.2 * getOffsetW(dx, dy));
 }
 
 void AuvManager::turnRight() {

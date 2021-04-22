@@ -99,12 +99,16 @@ bool fit(const vector<Point> &points, Vec2f &out) {
 }
 
 TubeDetectionError findTubeLsm(const Mat &src, AuvManager &auv, RunningStatus &status,
-                               Mat &debug, vector<String> &dbg) {
+                               Mat &debug, vector<String> &dbg, float *pwb) {
     vector<Point> points = getSamplePoints(src, debug, dbg, 20);
     Vec2f wb;
     if (fit(points, wb)) {
         float w = wb[0];
         float b = wb[1];
+        if (pwb != nullptr) {
+            pwb[0] = w;
+            pwb[1] = b;
+        }
         line(debug, Point(b, 0), Point(int(float(src.rows) * w + b), src.rows), Scalar(0, 255, 0), 2);
         float deltaX = int(float(src.rows / 2) * w + b) - src.cols / 2;
         float rad = atan(w);
@@ -336,6 +340,7 @@ Mat handleFrameAndSendCmdLoop(const Mat &src, AuvManager &auv, RunningStatus &st
 //        }
 //    }
     TubeDetectionError tubeError = {false, 0, 0};
+    float extraWb[2];
     if (false) {
         {
             if (tube.hasTube) {
@@ -358,16 +363,28 @@ Mat handleFrameAndSendCmdLoop(const Mat &src, AuvManager &auv, RunningStatus &st
     if (tubeError.found) {
         float refs[4];
         auv.updateCurrentError(tubeError.deltaX, tubeError.deltaYaw * 57.3f, &refs);
+        for (int k = 0; k < 4; k++) {
+            lastMotionCmd[k] = refs[k];
+        }
         dbg.emplace_back((sprintf(buf, "  Xo: %+.1f", refs[0]), buf));
         dbg.emplace_back((sprintf(buf, "  Yo: %+.1f", refs[1]), buf));
         dbg.emplace_back((sprintf(buf, "  Zo: %+.1f", refs[2]), buf));
         dbg.emplace_back((sprintf(buf, "  Wo: %+.1f", refs[3]), buf));
+    } else {
+        auv.rtlControlMotionOutput(0, 0.75f * lastMotionCmd[1], 0, 0);
+        dbg.emplace_back("**RESCUE MODE**");
+        dbg.emplace_back((sprintf(buf, "  Yo: %+.1f", 0.75f * lastMotionCmd[1]), buf));
     }
     {
         vector<Rect> absorbates = findAbsorbates(src, auv, status, debug, dbg);
         vector<Rect> rectAbs;
         Rect full = Rect(0, 0, src.cols, src.rows);
-        for (auto &ra:absorbates) {
+        int t_thisHas = 0;
+        int minDistIdx = -1;
+        float minDist = -1;
+        ClassificationManager::Result bestResult;
+        for (int i = 0; i < absorbates.size(); i++) {
+            auto &ra = absorbates[i];
             Rect r = getContainingSquareRect(inflateRectBy(ra, full, 0.1f), full);
             rectAbs.emplace_back(r);
             rectangle(debug, r, Scalar(0, 0, 255));
@@ -383,14 +400,33 @@ Mat handleFrameAndSendCmdLoop(const Mat &src, AuvManager &auv, RunningStatus &st
                 default:
                     name = "nothing";
             }
-            DrawTextLeftCenterAutoColor(debug, (sprintf(buf, "%s %.3f", name, result.confidence), buf), r.x, r.y - 10);
+            if (result.type != ClassificationManager::TYPE_NOTHING) {
+                if (tubeError.found) {
+                    float dist = getRectCenterToLineDistance(ra, extraWb[0], extraWb[1]);
+                    if (minDist < 0 || dist < minDist) {
+                        minDist = dist;
+                        minDistIdx = i;
+                        bestResult = result;
+                    }
+                    t_thisHas++;
+                }
+                DrawTextLeftCenterAutoColor(debug, (sprintf(buf, "%s %.3f", name, result.confidence), buf),
+                                            r.x, r.y - 10);
+            }
+
 //            ClassificationManager::predict(dsgResizeTo96(src, r));
 //            dsgResizeAndSaveImg(src, r, "test");
 //            msleep(20);
         }
-        bool lastHasAbs = status.hasAbsorbateNow;
-        bool thisHasAbs = status.hasAbsorbateNow = !absorbates.empty();
-
+        if (tubeError.found) {
+            bool lastHasAbs = status.hasAbsorbateNow;
+            bool thisHasAbs = status.hasAbsorbateNow = !!t_thisHas;
+            dbg.emplace_back((sprintf(buf, "AbsCnt=%d", t_thisHas), buf));
+            if (lastHasAbs == false && thisHasAbs == true) {
+                auv.reportAdsorbate(1, bestResult.type == ClassificationManager::TYPE_SQUARE ?
+                                       AuvManager::SHAPE_RECTANGLE : AuvManager::SHAPE_CIRCLE);
+            }
+        }
     }
     if (SHOW_WINDOW) {
         DrawTextLeftCenterAutoColor(debug, "+-----------+ 100px", 16, debug.rows - 32);
