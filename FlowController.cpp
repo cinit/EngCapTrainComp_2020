@@ -391,11 +391,11 @@ Mat handleFrameAndSendCmdLoop(const Mat &src, AuvManager &auv, RunningStatus &st
         int delW = 0;
         if (action == 1) {
             dbg.emplace_back("**RESCUE MODE** go right");
-            delY = 35;
+            delY = 37;
             delW = 42;
         } else if (action == -1) {
             dbg.emplace_back("**RESCUE MODE** go left");
-            delY = -35;
+            delY = -37;
             delW = -42;
         }
         auv.rtlControlMotionOutput(0, delY, 0, delW);

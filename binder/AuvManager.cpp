@@ -37,7 +37,7 @@ void AuvManager::setForwardVelocity(int speed) {
 void AuvManager::updateCurrentError(int translationOffset, int degreeOffset, float (*outptr)[4]) {
     if (forwardSpeed != 0) {
         float outX = (float) forwardSpeed;
-        float outY = in_range(-32, translationY.update((float) translationOffset), 32);
+        float outY = in_range(-40, translationY.update((float) translationOffset), 40);
         float outZ = 0;
         float outW = in_range(-32, rotationYaw.update((float) degreeOffset), 32);
         int d = (in_range(0, std::abs(outY), 100) * 1.5f + in_range(0, std::abs(outW), 100)) / 2;
