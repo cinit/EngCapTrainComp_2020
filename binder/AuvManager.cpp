@@ -15,20 +15,11 @@ const float PIXEL_COEFF = 1.0;
 const int TIME_UNIT = 100;
 const int MAX_TIME_INTERVAL = 1000;
 
-inline int in_range(int min, int value, int max) {
-    if (value < min) {
-        value = min;
-    }
-    if (value > max) {
-        value = max;
-    }
-    return value;
-}
 
 AuvManager::AuvManager(SerialInterface &usart) :
         usart(usart),
-        translationY(0.2, 0, 0.001, 100, 10),
-        rotationYaw(0.43, 0, 0.01, 100, 10) {
+        translationY(0.27, 0, 0.001, 100, 10),
+        rotationYaw(0.4, 0, 0.1, 100, 10) {
 }
 
 AuvManager::AuvManager(AuvManager &that) = default;
@@ -46,10 +37,10 @@ void AuvManager::setForwardVelocity(int speed) {
 void AuvManager::updateCurrentError(int translationOffset, int degreeOffset, float (*outptr)[4]) {
     if (forwardSpeed != 0) {
         float outX = (float) forwardSpeed;
-        float outY = in_range(-40, translationY.update((float) translationOffset), 40);
+        float outY = in_range(-32, translationY.update((float) translationOffset), 32);
         float outZ = 0;
-        float outW = in_range(-50, rotationYaw.update((float) degreeOffset), 50);
-        int d = (in_range(0, std::abs(outY), 100) * 1.3f + in_range(0, std::abs(outW), 100)) / 4;
+        float outW = in_range(-32, rotationYaw.update((float) degreeOffset), 32);
+        int d = (in_range(0, std::abs(outY), 100) * 1.5f + in_range(0, std::abs(outW), 100)) / 2;
         outX -= d;
         if (outX < 0)outX = 0;
         if (outptr != nullptr) {

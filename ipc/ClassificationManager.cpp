@@ -8,6 +8,7 @@
 socket_communication::Client sClient;
 
 bool ClassificationManager::connect() {
+//    sClient.Init("192.168.43.242", 11451);
     sClient.Init("127.0.0.1", 11451);
     return true;
 }

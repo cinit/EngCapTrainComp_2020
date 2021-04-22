@@ -28,4 +28,14 @@ uint64_t currentTimeMillis();
 
 typedef unsigned char uchar;
 
+inline int in_range(int min, int value, int max) {
+    if (value < min) {
+        value = min;
+    }
+    if (value > max) {
+        value = max;
+    }
+    return value;
+}
+
 #endif //ENGINEERTRAINUPPERCTL_COMMON_H

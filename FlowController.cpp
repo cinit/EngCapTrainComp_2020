@@ -139,7 +139,7 @@ bool isPointOnRightBorder(const Point &p, const Mat &mat) {
     return p.x > width - 10;
 }
 
-int g_thres_v_up = 142;
+int g_thres_v_up = 160;
 
 void findTubeAndAbsorbateLoop(cv::VideoCapture &video, AuvManager &auv, bool showWindow) {
     SHOW_WINDOW = showWindow;
@@ -325,6 +325,16 @@ Rect inflateRectBy(const Rect &target, const Rect &container, float ratio) {
     return {startx, starty, endx - startx, endy - starty};
 }
 
+float lastMotionCmd[4] = {0};
+
+float getRectCenterToLineDistance(const Rect &rect, float w, float b) {
+    int x = rect.x + rect.width / 2;
+    int y = rect.y + rect.height / 2;
+    // x=wy+b,
+    float dist = abs(w * y - x + b) / sqrt(w * w + 1);
+    return dist;
+}
+
 Mat handleFrameAndSendCmdLoop(const Mat &src, AuvManager &auv, RunningStatus &status) {
     Mat tmp1;
     Mat debug = src.clone();
@@ -358,7 +368,7 @@ Mat handleFrameAndSendCmdLoop(const Mat &src, AuvManager &auv, RunningStatus &st
             tubeError = fallbackSeekForOperation(src, auv, status, debug, dbg);
         }
     } else {
-        tubeError = findTubeLsm(src, auv, status, debug, dbg);
+        tubeError = findTubeLsm(src, auv, status, debug, dbg, extraWb);
     }
     if (tubeError.found) {
         float refs[4];
@@ -371,9 +381,26 @@ Mat handleFrameAndSendCmdLoop(const Mat &src, AuvManager &auv, RunningStatus &st
         dbg.emplace_back((sprintf(buf, "  Zo: %+.1f", refs[2]), buf));
         dbg.emplace_back((sprintf(buf, "  Wo: %+.1f", refs[3]), buf));
     } else {
-        auv.rtlControlMotionOutput(0, 0.75f * lastMotionCmd[1], 0, 0);
-        dbg.emplace_back("**RESCUE MODE**");
-        dbg.emplace_back((sprintf(buf, "  Yo: %+.1f", 0.75f * lastMotionCmd[1]), buf));
+        int action = 0;
+        if (lastMotionCmd[1] > 0) {
+            action = 1;
+        } else if (lastMotionCmd[1] < 0) {
+            action = -1;
+        }
+        int delY = 0;
+        int delW = 0;
+        if (action == 1) {
+            dbg.emplace_back("**RESCUE MODE** go right");
+            delY = 35;
+            delW = 42;
+        } else if (action == -1) {
+            dbg.emplace_back("**RESCUE MODE** go left");
+            delY = -35;
+            delW = -42;
+        }
+        auv.rtlControlMotionOutput(0, delY, 0, delW);
+        dbg.emplace_back((sprintf(buf, "  Yo: %d", delY), buf));
+        dbg.emplace_back((sprintf(buf, "  Wo: %d", delW), buf));
     }
     {
         vector<Rect> absorbates = findAbsorbates(src, auv, status, debug, dbg);
@@ -581,12 +608,20 @@ void find_blob(int roi_i, int roi_num, const Mat &binary,
 
 vector<Point> getSamplePoints(const Mat &src, Mat &debug, vector<String> &dbg, int roi_all) {
     vector<Point> points;
-    Mat lab;
-    cvtColor(src, lab, COLOR_BGR2Lab);// 综合对比发现lab能够很快的分辨出红色圆圈
-    Mat lab_frame;
-    inRange(lab, Scalar(165, 0, 108), Scalar(255, 255, 255), lab_frame);
-    Mat close;
-    morphologyEx(lab_frame, close, MORPH_CLOSE, getStructuringElement(MORPH_ELLIPSE, Size(13, 13)));
+    Mat lab,close;
+//    cvtColor(src, lab, COLOR_BGR2Lab);// 综合对比发现lab能够很快的分辨出红色圆圈
+//    Mat lab_frame;
+//    inRange(lab, Scalar(182, 0, 108), Scalar(255, 255, 255), lab_frame);
+//    Mat close;
+//    morphologyEx(lab_frame, close, MORPH_CLOSE, getStructuringElement(MORPH_ELLIPSE, Size(13, 13)));
+//
+    inRange(src, Scalar(180, 180, 150), Scalar(255, 255, 255), lab);
+    Mat tmpStructEle = getStructuringElement(MORPH_RECT, Size(5, 5));
+    //开闭操作，去除噪点
+    morphologyEx(lab, lab, MORPH_OPEN, tmpStructEle);
+    morphologyEx(lab, close, MORPH_CLOSE, tmpStructEle);
+
+
     for (int i = 0; i < roi_all; i++) {
         vector<vector<Point>> contour;
         Rect roi;
@@ -603,7 +638,7 @@ vector<Point> getSamplePoints(const Mat &src, Mat &debug, vector<String> &dbg, i
                 continue;
             }
             // 通过判断blob的宽度来过滤
-            if (r.width > src.cols * 0.7) {
+            if (r.width > src.cols * 0.8) {
                 continue;
             }
             Moments M = moments(contour[0]);
@@ -747,7 +782,7 @@ TubeDetectResult findTube(const Mat &src, AuvManager &auv, RunningStatus &status
     vector<vector<Point>> contours;
     vector<Vec4i> hierarchy;
     Mat pipeTh;
-    inRange(src, Scalar(110, 100, 100), Scalar(255, 255, 255), pipeTh);
+    inRange(src, Scalar(180, 180, 150), Scalar(255, 255, 255), pipeTh);
     Mat tmpStructEle = getStructuringElement(MORPH_RECT, Size(5, 5));
     //开闭操作，去除噪点
     morphologyEx(pipeTh, pipeTh, MORPH_OPEN, tmpStructEle);
