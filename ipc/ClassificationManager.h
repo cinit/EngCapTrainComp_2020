@@ -30,6 +30,8 @@ public:
     static Prediction predict(const cv::Mat &img);
 
     static Result classify(const cv::Mat &img);
+
+    static const char *getLabelName(int i);
 };
 
 #endif //ENGINEERTRAINUPPERCTL_CLASSIFICATIONMANAGER_H

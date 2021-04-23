@@ -32,7 +32,8 @@ set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Werror=return-type")
 
 set(SOURCE_FILES ui/Widgets.cpp ui/VgaFont.cpp ui/Fixedsys.c main.cpp binder/AuvManager.cpp binder/LinuxSerial.cpp binder/SerialInterface.cpp FlowController.cpp
         util/PidF.cpp util/common.cpp DataSetGenerator.cpp
-        ipc/cpp_sockets/src/client.cpp ipc/ClassificationManager.cpp)
+        ipc/cpp_sockets/src/client.cpp ipc/ClassificationManager.cpp
+        test/TestClassUtil.cpp)
 
 add_executable(EngineerTrainUpperCtl ${SOURCE_FILES})         # compiler sources to a exe named target, not a library
 

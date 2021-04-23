@@ -5,6 +5,7 @@
 #include "binder/AuvManager.h"
 #include "util/common.h"
 #include "ipc/ClassificationManager.h"
+#include "test/TestClassUtil.h"
 
 #define SERIAL_DEV "/dev/ttyUSB0"
 
@@ -14,6 +15,8 @@ using namespace std;
 #define DEBUG_MOTION 0
 
 int main() {
+//    showTestWindowLoop();
+//    return 0;
     LinuxSerial usart(SERIAL_DEV);
     if (!usart.isOpened()) {
         printf("open serial " SERIAL_DEV " failed\n");
@@ -54,7 +57,7 @@ int main() {
 //        auv.reportAdsorbate(2, AuvManager::SHAPE_RECTANGLE);
 
 //        auv.rtlControlMotionOutput(-100,0,0,-30);
-        auv.ntControlMotionOutput(0,0, 0, 44);
+        auv.ntControlMotionOutput(0, 0, 0, 44);
         msleep(6000);
         auv.rtlControlMotionOutput(0, 0, 0, 0);
     }

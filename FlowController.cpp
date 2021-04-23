@@ -139,7 +139,7 @@ bool isPointOnRightBorder(const Point &p, const Mat &mat) {
     return p.x > width - 10;
 }
 
-int g_thres_v_up = 160;
+int g_thres_v_up = 144;
 
 void findTubeAndAbsorbateLoop(cv::VideoCapture &video, AuvManager &auv, bool showWindow) {
     SHOW_WINDOW = showWindow;
@@ -413,20 +413,13 @@ Mat handleFrameAndSendCmdLoop(const Mat &src, AuvManager &auv, RunningStatus &st
         for (int i = 0; i < absorbates.size(); i++) {
             auto &ra = absorbates[i];
             Rect r = getContainingSquareRect(inflateRectBy(ra, full, 0.1f), full);
+            if (r.y < 280 || r.y + r.height - 1 > 477) {
+                continue;
+            }
             rectAbs.emplace_back(r);
             rectangle(debug, r, Scalar(0, 0, 255));
             ClassificationManager::Result result = ClassificationManager::classify(dsgResizeTo96(src, r));
-            const char *name;
-            switch (result.type) {
-                case ClassificationManager::TYPE_ROUND:
-                    name = "round";
-                    break;
-                case ClassificationManager::TYPE_SQUARE:
-                    name = "square";
-                    break;
-                default:
-                    name = "nothing";
-            }
+            const char *name = ClassificationManager::getLabelName(result.type);
             if (result.type != ClassificationManager::TYPE_NOTHING) {
                 if (tubeError.found) {
                     float dist = getRectCenterToLineDistance(ra, extraWb[0], extraWb[1]);
@@ -608,7 +601,7 @@ void find_blob(int roi_i, int roi_num, const Mat &binary,
 
 vector<Point> getSamplePoints(const Mat &src, Mat &debug, vector<String> &dbg, int roi_all) {
     vector<Point> points;
-    Mat lab,close;
+    Mat lab, close;
 //    cvtColor(src, lab, COLOR_BGR2Lab);// 综合对比发现lab能够很快的分辨出红色圆圈
 //    Mat lab_frame;
 //    inRange(lab, Scalar(182, 0, 108), Scalar(255, 255, 255), lab_frame);
